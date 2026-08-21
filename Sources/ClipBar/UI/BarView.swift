@@ -124,18 +124,37 @@ struct BarView: View {
     private var searchField: some View {
         HStack(spacing: 5) {
             Image(systemName: "magnifyingglass").font(.system(size: 12)).opacity(0.6)
+
             // Not an NSTextField: focus inside a borderless panel is fragile, so
-            // OverlayController routes keystrokes here directly. Just type.
-            Text(model.search.isEmpty ? "digite para buscar em tudo…" : model.search)
-                .font(.system(size: 13))
-                .opacity(model.search.isEmpty ? 0.45 : 1)
-                .lineLimit(1)
+            // OverlayController routes every keystroke straight here. The caret
+            // is drawn whenever the bar is browsing because that is the truth —
+            // this field is never *not* taking input, so there is nothing to
+            // click into. Clicking used to clear the search, which is the
+            // opposite of what clicking a search field should do.
+            HStack(spacing: 2) {
+                Text(model.search)
+                    .font(.system(size: 13))
+                    .lineLimit(1)
+                if model.mode == .browsing {
+                    Rectangle()
+                        .fill(Color.accentColor)
+                        .frame(width: 1.5, height: 15)
+                }
+                if model.search.isEmpty {
+                    Text("buscar por nome ou conteúdo…")
+                        .font(.system(size: 13))
+                        .opacity(0.45)
+                        .lineLimit(1)
+                }
+            }
+
             Spacer(minLength: 0)
             if !model.search.isEmpty {
                 Button { model.clearSearch() } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 12)).opacity(0.6)
                 }
                 .buttonStyle(.plain)
+                .help("Limpar a busca")
             }
         }
         .padding(.horizontal, 11)
@@ -143,7 +162,6 @@ struct BarView: View {
         .frame(width: 240, alignment: .leading)
         .background(Color.black.opacity(0.22), in: Capsule())
         .contentShape(Capsule())
-        .onTapGesture { model.clearSearch() }
     }
 
     private func editor(icon: String, label: String) -> some View {
@@ -276,13 +294,6 @@ struct BarView: View {
         Button("Colar   ⏎") { onActivate(index) }
         Button("Copiar   ⌘C") { onCopy(index) }
 
-        if model.visible.indices.contains(index), model.visible[index].pinboardID != nil {
-            Button("Mover para os recentes   ⌃C") {
-                model.select(index: index)
-                model.moveSelectedToHistory()
-            }
-        }
-
         Divider()
 
         Button("Renomear   ⌘R") {
@@ -319,7 +330,6 @@ struct BarView: View {
             hint("⌘R", "renomear")
             hint("⌘P", "mover")
             hint("⌘N", "nova pasta")
-            hint("⌃C", "recentes")
             hint("⌫", model.multiSelection.count > 1
                         ? "apagar \(model.multiSelection.count)"
                         : "apagar")

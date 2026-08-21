@@ -294,7 +294,7 @@ final class Store {
                      if let path = Self.text(stmt, 1) { paths.append(path) }
                  })
         try exec("DELETE FROM items WHERE id = ?") { sqlite3_bind_int64($0, 1, id) }
-        return paths
+        return try orphaned(paths)
     }
 
     /// Moves an item, merging it when the destination already holds the same
@@ -354,7 +354,8 @@ final class Store {
             Self.bind(stmt, 3, blob: sealedDomain)
             sqlite3_bind_int64(stmt, 4, id)
         }
-        return previousImage == imagePath ? nil : previousImage
+        guard let previousImage, previousImage != imagePath else { return nil }
+        return try orphaned([previousImage]).first
     }
 
     /// Loose history only: pinned items are never swept.
@@ -407,7 +408,28 @@ final class Store {
                      if let path = Self.text(stmt, 1) { orphans.append(path) }
                  })
         try exec("DELETE FROM items WHERE \(condition)", bind: bind)
-        return orphans
+        return try orphaned(orphans)
+    }
+
+    /// Drops paths another row still points at.
+    ///
+    /// Rows can share an encrypted file: using an item out of a pinboard leaves
+    /// a copy in the loose history pointing at the same blob. Deleting either row
+    /// must not delete the file the other one still draws from. Called *after*
+    /// the DELETE, so the row being removed no longer counts as a reference.
+    private func orphaned(_ paths: [String]) throws -> [String] {
+        var result: [String] = []
+        for path in Set(paths) {
+            var references = 0
+            try step("SELECT COUNT(*) FROM items WHERE blob_path = ? OR link_image_path = ?",
+                     bind: { stmt in
+                         sqlite3_bind_text(stmt, 1, path, -1, SQLITE_TRANSIENT)
+                         sqlite3_bind_text(stmt, 2, path, -1, SQLITE_TRANSIENT)
+                     },
+                     row: { references = Int(sqlite3_column_int64($0, 0)) })
+            if references == 0 { result.append(path) }
+        }
+        return result
     }
 
     // MARK: - Pinboards

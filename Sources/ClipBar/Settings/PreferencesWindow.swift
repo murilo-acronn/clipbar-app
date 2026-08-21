@@ -432,7 +432,6 @@ struct PreferencesView: View {
         ("⏎", "Colar no app anterior"),
         ("⌘1–⌘9", "Colar direto o card N"),
         ("⌘C", "Copiar sem colar"),
-        ("⌃C", "Mover para os recentes"),
         ("⌘R", "Dar um nome ao card"),
         ("⌘P", "Mover para outra pasta"),
         ("⌘N", "Criar pasta"),

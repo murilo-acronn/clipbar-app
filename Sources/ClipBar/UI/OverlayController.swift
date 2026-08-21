@@ -76,6 +76,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         guard let item = model.selectedItem else { return }
 
         Paster.place(item, blobs: blobs, monitor: monitor)
+        model.recordUseInHistory(item)
         Feedback.pasted()
         let canAutoPaste = Paster.canAutoPaste
 
@@ -107,6 +108,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private func copySelected() {
         guard let item = model.selectedItem else { return }
         Paster.place(item, blobs: blobs, monitor: monitor)
+        model.recordUseInHistory(item)
         Feedback.captured()
         hide()
     }
@@ -233,13 +235,6 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private func handleBrowsing(_ event: NSEvent) -> Bool {
         let command = event.modifierFlags.contains(.command)
         let shift = event.modifierFlags.contains(.shift)
-        let control = event.modifierFlags.contains(.control)
-
-        if control, event.charactersIgnoringModifiers?.lowercased() == "c" {
-            model.moveSelectedToHistory()
-            return true
-        }
-
         if command, let key = event.charactersIgnoringModifiers?.lowercased() {
             switch key {
             case "c": copySelected(); return true

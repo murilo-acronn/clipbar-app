@@ -233,16 +233,28 @@ final class BarViewModel: ObservableObject {
         reload()
     }
 
-    /// Sends the selected item back to the loose history — "recentes" — which is
-    /// what Paste does when you use something out of a pinboard. It moves rather
-    /// than copies: a second row with the same content would just be clutter, and
-    /// the dedupe index would reject it anyway.
-    func moveSelectedToHistory() {
-        guard let item = selectedItem, item.pinboardID != nil, let id = item.id else { return }
-        if let orphans = try? store.move(id: id, toPinboard: nil) {
-            for orphan in orphans { blobs?.delete(orphan) }
-        }
-        reload()
+    /// Using an item that lives in a pinboard surfaces it in the loose history
+    /// too — and the item **stays filed**. That's the whole point: a pinboard is
+    /// where you keep something, recents is what you touched last, and one thing
+    /// can be in both. The earlier version of this moved the item out of its
+    /// pinboard, which emptied the folder you were curating.
+    ///
+    /// The copy points at the same encrypted blob instead of duplicating the
+    /// file; `Store.orphaned` is what stops deleting one row from destroying the
+    /// other's image.
+    func recordUseInHistory(_ item: ClipItem) {
+        guard item.pinboardID != nil else { return }
+
+        var copy = item
+        copy.id = nil
+        copy.pinboardID = nil
+        copy.createdAt = Date()
+        copy.lastUsedAt = Date()
+
+        // Result discarded on purpose: its discardedBlobPath names a file the
+        // pinboard row still owns, so acting on it would delete a live image.
+        // When a loose copy already exists, upsert just bumps it to the top.
+        _ = try? store.upsert(copy)
     }
 
     func beginCreatePinboard() {
