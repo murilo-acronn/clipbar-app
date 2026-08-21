@@ -141,23 +141,58 @@ enum Updater {
         case failed(String)
     }
 
+    /// Clones whose origin we're willing to pull and execute. The marker file is
+    /// plain text any user-level process can rewrite; without this check, that's
+    /// enough to make "Atualizar" run an attacker's install.sh as a child of an
+    /// app holding the Accessibility grant. Requiring the remote to be ours means
+    /// hijacking also requires push access to these repositories.
+    private static let trustedRemotePrefixes = [
+        "https://github.com/murilo-acronn/",
+        "git@github.com:murilo-acronn/",
+    ]
+
     /// `git pull` in the recorded clone, then re-run `install.sh`. `install.sh`
     /// ends by killing the running app and reopening the freshly built one, so
-    /// on the happy path the caller does not survive to see this finish — a
-    /// synchronous wait would just get cut off along with everything else,
-    /// which is why this reads the pipe and awaits termination instead.
+    /// on the happy path the caller does not survive to see this finish.
+    ///
+    /// Output goes to a temp file, not a Pipe: nothing reads a pipe until
+    /// termination, so a chatty failing build would fill the 64KB buffer, block
+    /// the child on write, and hang "Atualizando…" forever. A file has no such
+    /// backpressure, and on failure we read its tail for the error message.
+    ///
+    /// Plain `bash -c`, not `-lc`: login shells source the user's profile, which
+    /// is one more place code could be injected from, and everything install.sh
+    /// needs lives in the default PATH anyway.
     static func applyUpdate() async -> ApplyResult {
         guard canApplyUpdate(), let path = sourcePath else {
             return .failed("Não achei o clone original — atualize com git pull manual.")
         }
 
+        let allowed = trustedRemotePrefixes
+            .map { "\"${REMOTE}\" == \(shellQuote($0))*" }
+            .joined(separator: " || ")
+        let script = """
+            cd \(shellQuote(path.path)) || exit 66
+            REMOTE=$(git remote get-url origin) || exit 66
+            if ! [[ \(allowed) ]]; then
+                echo "remoto não reconhecido: ${REMOTE}"
+                exit 66
+            fi
+            git pull && JOBS=2 ./scripts/install.sh
+            """
+
+        let logURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clipbar-update-\(UUID().uuidString).log")
+        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        guard let log = try? FileHandle(forWritingTo: logURL) else {
+            return .failed("Não consegui criar o log da atualização.")
+        }
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = ["-lc", "cd \(shellQuote(path.path)) && git pull && JOBS=2 ./scripts/install.sh"]
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
+        process.arguments = ["-c", script]
+        process.standardOutput = log
+        process.standardError = log
 
         do {
             try process.run()
@@ -167,11 +202,13 @@ enum Updater {
 
         return await withCheckedContinuation { continuation in
             process.terminationHandler = { proc in
+                try? log.close()
+                defer { try? FileManager.default.removeItem(at: logURL) }
+
                 if proc.terminationStatus == 0 {
                     continuation.resume(returning: .succeeded)
                 } else {
-                    let data = try? pipe.fileHandleForReading.readToEnd()
-                    let output = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                    let output = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
                     let tail = output.split(separator: "\n").suffix(3).joined(separator: " · ")
                     continuation.resume(returning: .failed(tail.isEmpty ? "git pull ou o build falharam." : tail))
                 }
