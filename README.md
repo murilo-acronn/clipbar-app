@@ -77,7 +77,10 @@ continua útil — o `⏎` copia e você cola com ⌘V.
 Com o mouse: **clique duplo** cola, **botão direito** abre o mesmo menu de ações,
 o **⋯** na barra de abas abre as preferências, e arrastar um card dentro de uma
 pasta muda sua ordem. O botão direito numa aba permite renomear ou excluir a
-pasta; ao excluir, os itens voltam para a Área de transferência.
+pasta; ao excluir, os itens voltam para a Área de transferência. No canto
+inferior direito, ao lado das dicas de atalho, fica o botão de **verificar
+atualizações** — veja a seção [Privacidade](#privacidade) pra saber exatamente
+o que ele faz.
 
 Dar nome é o que faz a busca ficar boa: `⌘R` num item, digite `contrato modelo`,
 e depois é só digitar "contrato" pra achar — mesmo que o texto do item não tenha
@@ -121,11 +124,19 @@ No **⋯** da barra, no ícone da barra de menus, ou com ⌘, :
 `clipbar.sqlite` e `blobs/`. A chave fica no Keychain, serviço `io.local.clipbar`.
 Pra apagar tudo, remova essa pasta e a entrada do Keychain.
 
-**Não existe relatório de erro nem telemetria.** A verificação de atualização é
-manual, não baixa nem instala nada sozinha — mostra a versão nova e abre a página
-do release, e quem atualiza é você, com `git pull && ./scripts/install.sh`.
-Um atualizador que troca o próprio app em execução é o código mais perigoso de um
-projeto assim, e este aqui não é notarizado nem tem como verificar o que baixou.
+**Não existe relatório de erro nem telemetria.** A verificação de atualização
+(botão "verificar atualizações" no canto da barra, ou nas preferências) é a única
+requisição de rede do app, e só acontece quando você clica. Se houver versão
+nova, o botão vira "Atualizar" — clicando, ele roda exatamente `git pull` no
+clone de onde o app foi instalado, seguido de `./scripts/install.sh`. Não baixa
+nenhum binário pronto de lugar nenhum: busca o código-fonte pelo mesmo remoto
+git em que o clone já confia, e recompila na sua máquina, com a sua assinatura
+local — os mesmos dois comandos que você rodaria à mão, só automatizados atrás
+de uma confirmação. O app fecha sozinho no meio do processo e reabre já
+atualizado.
+
+Instalações antigas, feitas antes desse recurso existir, não têm o clone
+registrado — o botão então só abre a página do release no GitHub.
 
 ## Migrar do Paste
 

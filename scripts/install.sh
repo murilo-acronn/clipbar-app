@@ -20,5 +20,11 @@ cp -R "$ROOT/build/$APP_NAME.app" "$TARGET"
 . "$ROOT/scripts/signing.sh"
 codesign --force --sign "$SIGN_ID" "$TARGET"
 
+# Record where this clone lives, so the app's "Atualizar" button knows what
+# to `git pull` — it has no other way to find its own source directory.
+SUPPORT="$HOME/Library/Application Support/ClipBar"
+mkdir -p "$SUPPORT"
+echo "$ROOT" > "$SUPPORT/source-path.txt"
+
 echo "→ instalado em $TARGET"
 open "$TARGET"

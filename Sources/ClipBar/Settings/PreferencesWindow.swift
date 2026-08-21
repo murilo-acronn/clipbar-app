@@ -137,19 +137,27 @@ struct PreferencesView: View {
         HStack(spacing: 10) {
             if let updateStatus {
                 Text(updateStatus).font(.caption).foregroundStyle(.secondary)
-                if let updateURL {
-                    Button("Abrir") { NSWorkspace.shared.open(updateURL) }
-                        .buttonStyle(.borderless)
-                        .font(.caption)
-                }
             }
             Spacer()
-            Button(checkingUpdate ? "Verificando…" : "Verificar atualizações") {
-                checkForUpdate()
+            if let updateURL, Updater.canApplyUpdate() {
+                Button(checkingUpdate ? "Atualizando…" : "Atualizar agora") {
+                    confirmAndApplyUpdate(url: updateURL)
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+                .disabled(checkingUpdate)
+            } else if let updateURL {
+                Button("Abrir") { NSWorkspace.shared.open(updateURL) }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+            } else {
+                Button(checkingUpdate ? "Verificando…" : "Verificar atualizações") {
+                    checkForUpdate()
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+                .disabled(checkingUpdate)
             }
-            .buttonStyle(.borderless)
-            .font(.caption)
-            .disabled(checkingUpdate)
 
             Text("v\(Updater.currentVersion)").font(.caption).foregroundStyle(.secondary)
         }
@@ -173,6 +181,31 @@ struct PreferencesView: View {
                     updateStatus = "Versão \(version) disponível."
                     updateURL = url
                 case let .failed(reason):
+                    updateStatus = reason
+                }
+            }
+        }
+    }
+
+    /// Applying is a one-way trip: this app quits partway through, so the user
+    /// gets one clear heads-up before it happens rather than a surprise.
+    private func confirmAndApplyUpdate(url: URL) {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Atualizar o ClipBar?"
+        alert.informativeText = "Vai buscar o código novo, recompilar e reabrir sozinho — leva alguns segundos. Nada disso acontece sem essa confirmação."
+        alert.addButton(withTitle: "Atualizar")
+        alert.addButton(withTitle: "Cancelar")
+        NSApp.activate()
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        checkingUpdate = true
+        Task {
+            let result = await Updater.applyUpdate()
+            // Reached only on failure — success replaces this very process.
+            await MainActor.run {
+                checkingUpdate = false
+                if case let .failed(reason) = result {
                     updateStatus = reason
                 }
             }

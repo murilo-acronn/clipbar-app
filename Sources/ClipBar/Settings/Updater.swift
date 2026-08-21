@@ -1,16 +1,19 @@
+import AppKit
 import Foundation
 
 /// Checks GitHub for a newer release, and only when the user asks.
 ///
-/// This is the app's single network request. It fires on a button press, never
-/// on a timer and never at launch, and it sends nothing but the request itself —
-/// no identifier, no version, no usage. Everything else in ClipBar stays offline,
-/// which is a promise worth keeping literally rather than approximately.
+/// The version check is the app's only unconditional network request. It fires
+/// on a button press, never on a timer and never at launch, and it sends
+/// nothing but the request itself — no identifier, no version, no usage.
 ///
-/// It deliberately stops at *telling* you. Downloading and swapping a running
-/// app in place is how an updater becomes the most dangerous code in the
-/// project, and this one is neither notarised nor able to verify what it
-/// downloaded — so it hands you the release page instead.
+/// Applying an update is a second, separate step the user also has to trigger
+/// explicitly (`applyUpdate()` below). It does not download a prebuilt binary
+/// from anywhere — that really would be the most dangerous code in an
+/// unnotarised project, since there'd be nothing to verify what arrived. What
+/// it does instead is `git pull` the clone the app was installed from, then
+/// rebuild and reinstall on this machine under its own signing identity —
+/// exactly the two commands the README already tells you to run by hand.
 enum Updater {
     static let repository = "murilo-acronn/clipbar-app"
 
@@ -109,5 +112,74 @@ enum Updater {
             }
             return 0
         }
+    }
+
+    // MARK: - Applying an update
+
+    /// Where `install.sh` recorded the clone it ran from. Nil for installs that
+    /// predate this — those fall back to opening the release page instead.
+    static var sourcePath: URL? {
+        let marker = Paths.support.appendingPathComponent("source-path.txt")
+        guard let raw = try? String(contentsOf: marker, encoding: .utf8) else { return nil }
+        let path = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty else { return nil }
+        return URL(fileURLWithPath: path)
+    }
+
+    /// True only when the recorded clone still looks like this project — it
+    /// exists, it's a git checkout, and it has the install script. Anything
+    /// less and we refuse rather than shell out blind at an arbitrary path.
+    static func canApplyUpdate() -> Bool {
+        guard let path = sourcePath else { return false }
+        let fm = FileManager.default
+        return fm.fileExists(atPath: path.appendingPathComponent(".git").path)
+            && fm.fileExists(atPath: path.appendingPathComponent("scripts/install.sh").path)
+    }
+
+    enum ApplyResult {
+        case succeeded
+        case failed(String)
+    }
+
+    /// `git pull` in the recorded clone, then re-run `install.sh`. `install.sh`
+    /// ends by killing the running app and reopening the freshly built one, so
+    /// on the happy path the caller does not survive to see this finish — a
+    /// synchronous wait would just get cut off along with everything else,
+    /// which is why this reads the pipe and awaits termination instead.
+    static func applyUpdate() async -> ApplyResult {
+        guard canApplyUpdate(), let path = sourcePath else {
+            return .failed("Não achei o clone original — atualize com git pull manual.")
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = ["-lc", "cd \(shellQuote(path.path)) && git pull && JOBS=2 ./scripts/install.sh"]
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+
+        do {
+            try process.run()
+        } catch {
+            return .failed("Não consegui iniciar a atualização: \(error.localizedDescription)")
+        }
+
+        return await withCheckedContinuation { continuation in
+            process.terminationHandler = { proc in
+                if proc.terminationStatus == 0 {
+                    continuation.resume(returning: .succeeded)
+                } else {
+                    let data = try? pipe.fileHandleForReading.readToEnd()
+                    let output = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                    let tail = output.split(separator: "\n").suffix(3).joined(separator: " · ")
+                    continuation.resume(returning: .failed(tail.isEmpty ? "git pull ou o build falharam." : tail))
+                }
+            }
+        }
+    }
+
+    private static func shellQuote(_ path: String) -> String {
+        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }

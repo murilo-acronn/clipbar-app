@@ -10,6 +10,9 @@ struct BarView: View {
     let onCopy: (Int) -> Void
     let onPreferences: () -> Void
 
+    @State private var updateResult: Updater.Result?
+    @State private var checkingUpdate = false
+
     /// Hand-rolled double-click detection. Combining a count-2 and a count-1
     /// TapGesture on the same view forces SwiftUI to hold the single tap for the
     /// whole double-click window before committing to it — selection then feels
@@ -325,9 +328,107 @@ struct BarView: View {
                 Text("\(model.visible.count) resultados em todas as pastas")
                     .font(.system(size: 11)).opacity(0.5)
             }
+            updateHint
         }
         .frame(height: 14)
         .opacity(model.mode == .browsing ? 1 : 0)
+    }
+
+    @ViewBuilder
+    private var updateHint: some View {
+        // A single action, branching on state — a Button's own tap handling and
+        // a layered onTapGesture on the same view double-fire instead of just
+        // being redundant, which is worse than the delay bug this pattern caused
+        // in CardView. One gesture, one path.
+        Button {
+            if case .available = updateResult {
+                confirmAndApplyUpdate()
+                return
+            }
+            checkingUpdate = true
+            Task {
+                let result = await Updater.check()
+                await MainActor.run {
+                    checkingUpdate = false
+                    updateResult = result
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                if checkingUpdate {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: updateIcon).font(.system(size: 10))
+                }
+                Text(updateLabel).font(.system(size: 11))
+            }
+            .opacity(0.55)
+        }
+        .buttonStyle(.plain)
+        .disabled(checkingUpdate)
+        .help(updateHelp)
+    }
+
+    private var updateIcon: String {
+        switch updateResult {
+        case .available: return "arrow.down.circle.fill"
+        case .upToDate:  return "checkmark.circle"
+        case .failed:    return "exclamationmark.circle"
+        case nil:        return "arrow.triangle.2.circlepath"
+        }
+    }
+
+    private var updateLabel: String {
+        switch updateResult {
+        case let .available(version, _): return "atualizar para \(version)"
+        case .upToDate:                  return "atualizado"
+        case .failed:                    return "verificar atualizações"
+        case nil:                        return "verificar atualizações"
+        }
+    }
+
+    private var updateHelp: String {
+        switch updateResult {
+        case .available:
+            return Updater.canApplyUpdate()
+                ? "Clique para recompilar e reiniciar o ClipBar com a versão nova"
+                : "Clone original não encontrado — clique para abrir o release no GitHub"
+        case .upToDate:            return "Você já está na versão mais recente"
+        case let .failed(reason):  return reason
+        case nil:                  return "Consulta o GitHub — nenhum dado seu é enviado"
+        }
+    }
+
+    /// Applying is a one-way trip: this app quits partway through, so the user
+    /// gets one clear heads-up before it happens rather than a surprise.
+    private func confirmAndApplyUpdate() {
+        guard case let .available(version, url) = updateResult else { return }
+
+        guard Updater.canApplyUpdate() else {
+            NSWorkspace.shared.open(url)
+            return
+        }
+
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Atualizar para a versão \(version)?"
+        alert.informativeText = "O ClipBar vai buscar o código novo, recompilar e reabrir sozinho — leva alguns segundos. Nada disso acontece sem essa confirmação."
+        alert.addButton(withTitle: "Atualizar")
+        alert.addButton(withTitle: "Cancelar")
+        NSApp.activate()
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        checkingUpdate = true
+        Task {
+            let result = await Updater.applyUpdate()
+            // Reached only on failure — success replaces this very process.
+            await MainActor.run {
+                checkingUpdate = false
+                if case let .failed(reason) = result {
+                    updateResult = .failed(reason)
+                }
+            }
+        }
     }
 
     private func hint(_ key: String, _ label: String) -> some View {
