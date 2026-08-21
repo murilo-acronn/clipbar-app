@@ -10,6 +10,15 @@ struct BarView: View {
     let onCopy: (Int) -> Void
     let onPreferences: () -> Void
 
+    /// Hand-rolled double-click detection. Combining a count-2 and a count-1
+    /// TapGesture on the same view forces SwiftUI to hold the single tap for the
+    /// whole double-click window before committing to it — selection then feels
+    /// laggy, because it's waiting to see if a second click is coming. A single
+    /// count-1 gesture never waits; it fires immediately, and we detect the
+    /// second click ourselves against the system's own double-click interval.
+    @State private var lastTapIndex: Int?
+    @State private var lastTapTime: Date = .distantPast
+
     var body: some View {
         ZStack {
             VisualEffectBackground()
@@ -214,9 +223,6 @@ struct BarView: View {
                                      accent: accent(for: item),
                                      pinboardName: badge(for: item))
                                 .id(index)
-                                // Declared before the single-tap so SwiftUI waits
-                                // for the second click instead of firing on the first.
-                                .onTapGesture(count: 2) { onActivate(index) }
                                 // SwiftUI's tap gesture carries no modifier flags,
                                 // so read them from the event that is being handled.
                                 .onTapGesture {
@@ -227,6 +233,15 @@ struct BarView: View {
                                         model.toggleSelection(at: index)
                                     } else {
                                         model.select(index: index)
+                                        let now = Date()
+                                        if lastTapIndex == index,
+                                           now.timeIntervalSince(lastTapTime) < NSEvent.doubleClickInterval {
+                                            onActivate(index)
+                                            lastTapIndex = nil
+                                        } else {
+                                            lastTapIndex = index
+                                            lastTapTime = now
+                                        }
                                     }
                                 }
                                 .contextMenu { cardMenu(index: index) }
