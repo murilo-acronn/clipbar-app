@@ -1,0 +1,8 @@
+.build/
+build/
+.release/
+.DS_Store
+
+# Sons copiados do Paste para uso local. Asset proprietário — nunca versionar.
+# Os sons próprios do ClipBar (gerados por scripts/make-sounds.py) ficam versionados.
+Resources/Sounds/Paste *.aiff
