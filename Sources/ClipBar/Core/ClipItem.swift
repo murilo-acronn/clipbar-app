@@ -1,7 +1,7 @@
 import AppKit
 import UniformTypeIdentifiers
 
-enum ClipKind: String {
+enum ClipKind: String, CaseIterable {
     case text, code, link, image, file, color, rtf
 }
 

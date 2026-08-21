@@ -152,64 +152,78 @@ enum Diagnostics {
             throw SelfTestFailure.assertion("exclusão de pasta preserva itens")
         }
 
-        try checkUseSurfacesInHistory(store: store, pinboardID: boardA)
+        try checkClipboardViewShowsEverything(store: store, pinboardID: boardA)
         try checkSharedBlobSurvivesOneDelete(store: store, blobs: blobs, pinboardID: boardA)
     }
 
-    /// Using a filed item must surface it in recents *and* leave it filed.
-    private static func checkUseSurfacesInHistory(store: Store, pinboardID: Int64) throws {
+    /// The clipboard view lists filed items too, copying already-filed content
+    /// must not create a twin, and using something must float it to the top.
+    private static func checkClipboardViewShowsEverything(store: Store, pinboardID: Int64) throws {
         let text = "usado a partir da pasta"
+        let fingerprint = try Crypto.fingerprint(Data(text.utf8))
         let filed = ClipItem(
             id: nil, kind: .text, title: nil, preview: text,
-            fingerprint: try Crypto.fingerprint(Data(text.utf8)),
+            fingerprint: fingerprint,
             blobPath: nil, byteSize: text.utf8.count, charCount: text.count,
             sourceBundleID: "io.local.clipbar.self-test", sourceName: "Self Test",
-            createdAt: Date(), lastUsedAt: Date(), pinboardID: pinboardID
+            createdAt: Date(timeIntervalSinceNow: -3600),
+            lastUsedAt: Date(timeIntervalSinceNow: -3600), pinboardID: pinboardID
         )
         let filedID = try store.upsert(filed).id
 
-        var copy = filed
-        copy.id = nil
-        copy.pinboardID = nil
-        copy.createdAt = Date()
-        _ = try store.upsert(copy)
-
-        guard try store.items(pinboardID: pinboardID).contains(where: { $0.id == filedID }) else {
-            throw SelfTestFailure.assertion("usar item da pasta não pode tirá-lo da pasta")
+        guard try store.items(pinboardID: nil).contains(where: { $0.id == filedID }) else {
+            throw SelfTestFailure.assertion("a área de transferência deve listar itens de pastas")
         }
-        guard try store.items(pinboardID: nil).contains(where: { $0.preview == text }) else {
-            throw SelfTestFailure.assertion("usar item da pasta deve fazê-lo aparecer nos recentes")
+
+        // Re-copying content that is already filed: bumps the filed row, never
+        // inserts an unfiled twin.
+        var recapture = filed
+        recapture.pinboardID = nil
+        recapture.createdAt = Date()
+        let recaptureID = try store.upsert(recapture).id
+        guard recaptureID == filedID else {
+            throw SelfTestFailure.assertion("recopiar item já arquivado não pode criar duplicata")
+        }
+        guard try store.allItems().filter({ $0.fingerprint == fingerprint }).count == 1 else {
+            throw SelfTestFailure.assertion("só pode existir uma linha por conteúdo")
+        }
+        guard try store.items(pinboardID: pinboardID).contains(where: { $0.id == filedID }) else {
+            throw SelfTestFailure.assertion("recopiar não pode tirar o item da pasta")
+        }
+
+        try store.touch(id: filedID)
+        guard try store.items(pinboardID: nil).first?.id == filedID else {
+            throw SelfTestFailure.assertion("usar um item deve levá-lo ao topo")
         }
     }
 
-    /// Two rows sharing one encrypted blob: deleting the first must not report
-    /// the file as orphaned, deleting the second must.
+    /// Two rows pointing at one encrypted file: deleting the first must not
+    /// report it as orphaned, deleting the last one must.
     private static func checkSharedBlobSurvivesOneDelete(store: Store, blobs: BlobStore,
                                                          pinboardID: Int64) throws {
         let payload = Data("imagem compartilhada".utf8)
         let path = try blobs.write(payload, extension: "png")
-        let label = "Imagem 10×10"
 
-        func imageRow(pinboardID: Int64?) throws -> ClipItem {
+        func imageRow(_ label: String) throws -> ClipItem {
             ClipItem(
                 id: nil, kind: .image, title: label, preview: label,
-                fingerprint: try Crypto.fingerprint(payload),
+                fingerprint: try Crypto.fingerprint(Data(label.utf8)),
                 blobPath: path, byteSize: payload.count, charCount: label.count,
                 sourceBundleID: "io.local.clipbar.self-test", sourceName: "Self Test",
                 createdAt: Date(), lastUsedAt: Date(), pinboardID: pinboardID
             )
         }
 
-        let filedID = try store.upsert(imageRow(pinboardID: pinboardID)).id
-        let looseID = try store.upsert(imageRow(pinboardID: nil)).id
+        let first = try store.upsert(imageRow("Imagem A")).id
+        let second = try store.upsert(imageRow("Imagem B")).id
 
-        guard try store.delete(id: looseID).isEmpty else {
+        guard try store.delete(id: first).isEmpty else {
             throw SelfTestFailure.assertion("blob ainda referenciado não pode ser apagado")
         }
         guard (try? blobs.read(path)) != nil else {
             throw SelfTestFailure.assertion("blob compartilhado sumiu cedo demais")
         }
-        guard try store.delete(id: filedID) == [path] else {
+        guard try store.delete(id: second) == [path] else {
             throw SelfTestFailure.assertion("último dono do blob deve liberá-lo")
         }
     }

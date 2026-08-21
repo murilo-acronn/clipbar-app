@@ -113,6 +113,20 @@ struct BarView: View {
         .contextMenu {
             if let id {
                 Button("Renomear pasta…") { model.beginRenamePinboard(id: id) }
+
+                Menu("Cor da pasta") {
+                    ForEach(Array(BarViewModel.palette.enumerated()), id: \.offset) { index, hex in
+                        Button {
+                            model.setPinboardColor(hex, for: id)
+                        } label: {
+                            let current = model.pinboards.first { $0.id == id }?.color
+                            Text("\(current?.caseInsensitiveCompare(hex) == .orderedSame ? "✓ " : "    ")"
+                                 + BarViewModel.paletteNames[index])
+                        }
+                    }
+                }
+
+                Divider()
                 Button("Excluir pasta…", role: .destructive) {
                     guard let board = model.pinboards.first(where: { $0.id == id }) else { return }
                     confirmDelete(board)
@@ -149,6 +163,7 @@ struct BarView: View {
             }
 
             Spacer(minLength: 0)
+            kindFilterMenu
             if !model.search.isEmpty {
                 Button { model.clearSearch() } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 12)).opacity(0.6)
@@ -159,9 +174,42 @@ struct BarView: View {
         }
         .padding(.horizontal, 11)
         .padding(.vertical, 5)
-        .frame(width: 240, alignment: .leading)
+        .frame(width: 268, alignment: .leading)
         .background(Color.black.opacity(0.22), in: Capsule())
         .contentShape(Capsule())
+    }
+
+    /// Narrowing by type belongs to the search, not to the tabs: it filters the
+    /// same result set the query does, and combines with it.
+    private var kindFilterMenu: some View {
+        Menu {
+            ForEach(ClipKind.allCases, id: \.self) { kind in
+                Button {
+                    model.toggleKindFilter(kind)
+                } label: {
+                    // A leading checkmark, because SwiftUI menus give no toggle
+                    // state of their own here.
+                    Text("\(model.kindFilter.contains(kind) ? "✓ " : "    ")\(kind.label)")
+                }
+            }
+            if !model.kindFilter.isEmpty {
+                Divider()
+                Button("Mostrar todos os tipos") { model.clearKindFilter() }
+            }
+        } label: {
+            Image(systemName: model.kindFilter.isEmpty
+                  ? "line.3.horizontal.decrease.circle"
+                  : "line.3.horizontal.decrease.circle.fill")
+                .font(.system(size: 12))
+                .opacity(model.kindFilter.isEmpty ? 0.6 : 1)
+                .foregroundStyle(model.kindFilter.isEmpty ? Color.primary : Color.accentColor)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 16)
+        .help(model.kindFilter.isEmpty
+              ? "Filtrar por tipo"
+              : "Filtrando: " + model.kindFilter.map(\.label).sorted().joined(separator: ", "))
     }
 
     private func editor(icon: String, label: String) -> some View {
@@ -473,9 +521,12 @@ struct BarView: View {
         return item.kind.accent
     }
 
-    /// While searching across everything, say where each hit actually lives.
+    /// Says which pinboard an item lives in, wherever that isn't already obvious:
+    /// in search results, and in the clipboard view now that it lists filed items
+    /// alongside unfiled ones. Inside a pinboard the badge would just repeat the
+    /// tab you already have open.
     private func badge(for item: ClipItem) -> String? {
-        guard model.isSearchingGlobally else { return nil }
+        guard model.isSearchingGlobally || model.activePinboardID == nil else { return nil }
         return model.pinboard(for: item)?.name
     }
 

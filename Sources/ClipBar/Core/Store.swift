@@ -121,6 +121,44 @@ final class Store {
         if try userVersion() < 2 {
             try exec("PRAGMA user_version = 2")
         }
+        if try userVersion() < 3 {
+            try mergeUnfiledTwins()
+            try exec("PRAGMA user_version = 3")
+        }
+    }
+
+    /// Removes unfiled rows whose content is already filed in a pinboard.
+    ///
+    /// A previous build treated "use an item from a pinboard" as "copy it into
+    /// the clipboard", which created a second row for the same content. Now that
+    /// the clipboard view lists filed items too, those twins show up twice. The
+    /// filed row wins — it is the one the user deliberately put somewhere — and
+    /// it inherits the twin's recency so it lands where they expect to find it.
+    private func mergeUnfiledTwins() throws {
+        var twins: [(loose: Int64, filed: Int64, lastUsed: Double)] = []
+        try step("""
+            SELECT loose.id, filed.id, MAX(loose.created_at, IFNULL(loose.last_used_at, 0))
+            FROM items AS loose
+            JOIN items AS filed
+              ON filed.fingerprint = loose.fingerprint AND filed.pinboard_id IS NOT NULL
+            WHERE loose.pinboard_id IS NULL
+            """) { stmt in
+            twins.append((sqlite3_column_int64(stmt, 0),
+                          sqlite3_column_int64(stmt, 1),
+                          sqlite3_column_double(stmt, 2)))
+        }
+
+        for twin in twins {
+            try exec("""
+                UPDATE items SET last_used_at = MAX(IFNULL(last_used_at, 0), ?) WHERE id = ?
+                """) { stmt in
+                sqlite3_bind_double(stmt, 1, twin.lastUsed)
+                sqlite3_bind_int64(stmt, 2, twin.filed)
+            }
+            // delete() already refuses to report a blob another row still uses,
+            // so the filed row keeps its image.
+            _ = try delete(id: twin.loose)
+        }
     }
 
     private func columnExists(_ column: String, in table: String) throws -> Bool {
@@ -240,9 +278,19 @@ final class Store {
         return UpsertResult(id: sqlite3_last_insert_rowid(db), discardedBlobPath: nil)
     }
 
+    /// `pinboardID: nil` is not "the unfiled bucket" — it is **everything**, filed
+    /// or not, most recently touched first. A pinboard is a filter over that same
+    /// set, kept in the order the user arranged by hand.
+    ///
+    /// This is why using something out of a pinboard doesn't need to copy it
+    /// anywhere: it already appears in the clipboard view, and touching it just
+    /// floats it up. An earlier version created a second row for that, which put
+    /// the same content on screen twice.
     func items(pinboardID: Int64?, limit: Int = 500) throws -> [ClipItem] {
-        let filter = pinboardID == nil ? "pinboard_id IS NULL" : "pinboard_id = ?"
-        let order = pinboardID == nil ? "created_at DESC" : "sort_index ASC, created_at DESC"
+        let filter = pinboardID == nil ? "1 = 1" : "pinboard_id = ?"
+        let order = pinboardID == nil
+            ? "MAX(created_at, IFNULL(last_used_at, created_at)) DESC"
+            : "sort_index ASC, created_at DESC"
 
         return try query("""
             SELECT id, kind, title, preview, fingerprint, blob_path, byte_size, char_count,
@@ -280,6 +328,16 @@ final class Store {
                    title_is_custom, link_title, link_image_path, link_domain
             FROM items ORDER BY created_at DESC LIMIT ?
             """, bind: { sqlite3_bind_int64($0, 1, Int64(limit)) })
+    }
+
+    /// Marks an item as just used, which is what floats it to the top of the
+    /// clipboard view. No copy and no new row — the item stays exactly where it
+    /// is, including inside whatever pinboard it belongs to.
+    func touch(id: Int64) throws {
+        try exec("UPDATE items SET last_used_at = ? WHERE id = ?") { stmt in
+            sqlite3_bind_double(stmt, 1, Date().timeIntervalSinceReferenceDate)
+            sqlite3_bind_int64(stmt, 2, id)
+        }
     }
 
     /// Returns every blob path the row owned. Deleting the row alone would leave
@@ -449,6 +507,13 @@ final class Store {
     }
 
     @discardableResult
+    func setPinboardColor(id: Int64, color: String) throws {
+        try exec("UPDATE pinboards SET color = ? WHERE id = ?") { stmt in
+            sqlite3_bind_text(stmt, 1, color, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_int64(stmt, 2, id)
+        }
+    }
+
     func createPinboard(name: String, color: String, sortIndex: Int) throws -> Int64 {
         try exec("INSERT INTO pinboards (name, color, sort_index) VALUES (?,?,?)") { stmt in
             sqlite3_bind_text(stmt, 1, name, -1, SQLITE_TRANSIENT)
@@ -516,11 +581,17 @@ final class Store {
 
     private func id(forFingerprint fingerprint: String, pinboardID: Int64?) throws -> Int64? {
         var found: Int64?
-        let filter = pinboardID == nil ? "pinboard_id IS NULL" : "pinboard_id = ?"
-        try step("SELECT id FROM items WHERE fingerprint = ? AND \(filter)", bind: { stmt in
+        // A capture (pinboardID nil) matches the content *anywhere*. Copying
+        // something that is already filed has to bump that row, not create an
+        // unfiled twin — the clipboard view shows filed items too, so a twin
+        // would simply appear on screen twice. Preferring the unfiled row keeps
+        // pre-existing databases stable.
+        let filter = pinboardID == nil ? "1 = 1" : "pinboard_id = ?"
+        let order = pinboardID == nil ? " ORDER BY pinboard_id IS NULL DESC, id ASC" : ""
+        try step("SELECT id FROM items WHERE fingerprint = ? AND \(filter)\(order)", bind: { stmt in
             sqlite3_bind_text(stmt, 1, fingerprint, -1, SQLITE_TRANSIENT)
             if let pinboardID { sqlite3_bind_int64(stmt, 2, pinboardID) }
-        }, row: { found = sqlite3_column_int64($0, 0) })
+        }, row: { if found == nil { found = sqlite3_column_int64($0, 0) } })
         return found
     }
 

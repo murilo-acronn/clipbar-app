@@ -32,9 +32,15 @@ enum Verify {
 
         var checked = 0, badText = 0, badBlob = 0
 
+        // Every row exactly once. `items(pinboardID: nil)` is the *whole*
+        // collection now, filed rows included, so listing it alongside each
+        // pinboard would check — and count — filed items twice.
+        let everything = try store.allItems()
+        let unfiled = everything.filter { $0.pinboardID == nil }
+
         for board in [nil] + boards.map(Optional.init) {
-            let name = board?.name ?? "(histórico solto)"
-            let items = try store.items(pinboardID: board?.id)
+            let name = board?.name ?? "(sem pasta)"
+            let items = board.map { current in everything.filter { $0.pinboardID == current.id } } ?? unfiled
             let hidden = board.map { isSensitive($0.name) } ?? false
 
             print("\n\(name) — \(items.count) itens\(hidden ? "  [conteúdo omitido]" : "")")

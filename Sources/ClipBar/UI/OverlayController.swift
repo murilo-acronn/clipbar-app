@@ -76,7 +76,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         guard let item = model.selectedItem else { return }
 
         Paster.place(item, blobs: blobs, monitor: monitor)
-        model.recordUseInHistory(item)
+        model.recordUse(item)
         Feedback.pasted()
         let canAutoPaste = Paster.canAutoPaste
 
@@ -108,7 +108,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private func copySelected() {
         guard let item = model.selectedItem else { return }
         Paster.place(item, blobs: blobs, monitor: monitor)
-        model.recordUseInHistory(item)
+        model.recordUse(item)
         Feedback.captured()
         hide()
     }

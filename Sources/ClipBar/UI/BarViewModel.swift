@@ -32,6 +32,12 @@ final class BarViewModel: ObservableObject {
         didSet { guard search != oldValue else { return }; refilter() }
     }
 
+    /// Empty means "every type". Lives next to the search because it narrows the
+    /// same result set — it is a way of searching, not a separate mode.
+    @Published var kindFilter: Set<ClipKind> = [] {
+        didSet { guard kindFilter != oldValue else { return }; refilter() }
+    }
+
     private var loaded: [ClipItem] = []
     private var everything: [ClipItem] = []
     private let store: Store
@@ -39,7 +45,14 @@ final class BarViewModel: ObservableObject {
     private var editingPinboardID: Int64?
 
     /// Fresh pinboards cycle through these, matching the palette Paste uses.
-    private static let palette = [
+    /// Also offered when recolouring a pinboard by hand, so a folder you rename
+    /// or recolour still looks like it belongs to the same set.
+    static let paletteNames = [
+        "Azul", "Verde", "Amarelo", "Vermelho",
+        "Roxo", "Laranja", "Cinza", "Ciano",
+    ]
+
+    static let palette = [
         "#62A9F5", "#52CC64", "#FAB700", "#F0554D",
         "#B663E0", "#FA9214", "#8F8F93", "#4DD0E1",
     ]
@@ -84,8 +97,16 @@ final class BarViewModel: ObservableObject {
         // replaces that array could make a later delete act on different items.
         multiSelection = []
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else {
+        guard !query.isEmpty || !kindFilter.isEmpty else {
             visible = loaded
+            selection = min(selection, max(visible.count - 1, 0))
+            return
+        }
+
+        // A type filter with no query narrows whatever list is already on screen,
+        // rather than jumping to a global search you didn't ask for.
+        guard !query.isEmpty else {
+            visible = loaded.filter { kindFilter.contains($0.kind) }
             selection = min(selection, max(visible.count - 1, 0))
             return
         }
@@ -96,6 +117,7 @@ final class BarViewModel: ObservableObject {
         // an item titled "Contrato — modelo 2026".
         let terms = query.split(separator: " ").map(String.init)
         visible = everything.filter { item in
+            guard kindFilter.isEmpty || kindFilter.contains(item.kind) else { return false }
             let haystack = [item.title ?? "", item.preview, item.sourceName ?? "",
                             item.linkTitle ?? "", item.linkDomain ?? ""]
                 .joined(separator: " ")
@@ -105,6 +127,19 @@ final class BarViewModel: ObservableObject {
             }
         }
         selection = min(selection, max(visible.count - 1, 0))
+    }
+
+    // MARK: - Filtro por tipo
+
+    func toggleKindFilter(_ kind: ClipKind) {
+        if kindFilter.contains(kind) { kindFilter.remove(kind) } else { kindFilter.insert(kind) }
+    }
+
+    func clearKindFilter() { kindFilter = [] }
+
+    func setPinboardColor(_ hex: String, for id: Int64) {
+        try? store.setPinboardColor(id: id, color: hex)
+        reload()
     }
 
     // MARK: - Navigation
@@ -233,28 +268,13 @@ final class BarViewModel: ObservableObject {
         reload()
     }
 
-    /// Using an item that lives in a pinboard surfaces it in the loose history
-    /// too — and the item **stays filed**. That's the whole point: a pinboard is
-    /// where you keep something, recents is what you touched last, and one thing
-    /// can be in both. The earlier version of this moved the item out of its
-    /// pinboard, which emptied the folder you were curating.
-    ///
-    /// The copy points at the same encrypted blob instead of duplicating the
-    /// file; `Store.orphaned` is what stops deleting one row from destroying the
-    /// other's image.
-    func recordUseInHistory(_ item: ClipItem) {
-        guard item.pinboardID != nil else { return }
-
-        var copy = item
-        copy.id = nil
-        copy.pinboardID = nil
-        copy.createdAt = Date()
-        copy.lastUsedAt = Date()
-
-        // Result discarded on purpose: its discardedBlobPath names a file the
-        // pinboard row still owns, so acting on it would delete a live image.
-        // When a loose copy already exists, upsert just bumps it to the top.
-        _ = try? store.upsert(copy)
+    /// Using an item floats it to the top of the clipboard view — and that's all
+    /// it does. No copy is made, because the clipboard view already lists every
+    /// item including the filed ones; the item stays in its pinboard, keeps its
+    /// colour, and simply becomes the most recent thing you touched.
+    func recordUse(_ item: ClipItem) {
+        guard let id = item.id else { return }
+        try? store.touch(id: id)
     }
 
     func beginCreatePinboard() {
