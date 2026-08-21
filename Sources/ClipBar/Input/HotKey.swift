@@ -14,7 +14,20 @@ final class HotKey {
     /// Whether the most recent init succeeded. RegisterEventHotKey refuses a
     /// combination another app already owns, and the preferences window has to
     /// tell the user instead of showing a shortcut that does nothing.
+    /// Whether the most recent `init?` returned without error.
+    ///
+    /// Nearly useless as a conflict check, and measured rather than assumed:
+    /// with ClipBar actively holding ⌘⌥V, a second process registering the very
+    /// same combination still got `noErr`. Carbon lets applications register
+    /// duplicates and silently delivers the event to only one of them, so a
+    /// successful registration says nothing about whether the key will ever
+    /// arrive. `lastFiredAt` is the only honest signal.
     private(set) static var lastRegistrationSucceeded = true
+
+    /// When a registered hot key last actually fired. The preferences window
+    /// watches this to confirm a freshly recorded shortcut really reaches us
+    /// instead of being swallowed by whichever app also claimed it.
+    private(set) static var lastFiredAt: Date?
 
     private var hotKeyRef: EventHotKeyRef?
     private let id: UInt32
@@ -55,6 +68,7 @@ final class HotKey {
                 MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID
             )
             guard status == noErr else { return status }
+            HotKey.lastFiredAt = Date()
             HotKey.callbacks[hotKeyID.id]?()
             return noErr
         }, 1, &spec, nil, &handlerRef)

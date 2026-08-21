@@ -104,6 +104,11 @@ struct PreferencesView: View {
     @State private var updateStatus: String?
     @State private var updateURL: URL?
     @State private var checkingUpdate = false
+    /// Set right after recording, cleared the moment the new shortcut actually
+    /// fires. See `HotKey.lastFiredAt` for why nothing else can tell us this.
+    @State private var awaitingHotKeyTest = false
+    @State private var hotKeyConfirmed = false
+    @State private var recordedAt = Date.distantPast
 
     var body: some View {
         NavigationSplitView {
@@ -127,6 +132,11 @@ struct PreferencesView: View {
             }
         }
         .frame(width: 680, height: 600)
+        .onReceive(Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()) { _ in
+            guard awaitingHotKeyTest, let fired = HotKey.lastFiredAt, fired > recordedAt else { return }
+            awaitingHotKeyTest = false
+            hotKeyConfirmed = true
+        }
         .onAppear { normalizeRetentionPreference() }
         .onDisappear { applyHistoryLimit() }
     }
@@ -406,6 +416,18 @@ struct PreferencesView: View {
             } else if isRecording {
                 Text("Aperte a combinação. Precisa incluir ⌘, ⌥ ou ⌃. Esc cancela.")
                     .font(.caption).foregroundStyle(.secondary)
+            } else if awaitingHotKeyTest {
+                // The only trustworthy conflict check there is. macOS accepts a
+                // duplicate registration from a second app without complaint and
+                // then delivers the key to just one of them, so "registered
+                // successfully" proves nothing — actually receiving the key does.
+                Label("Aperte \(hotKeyLabel) agora para confirmar. Se a barra não abrir, "
+                      + "outro app está capturando essa combinação — escolha outra.",
+                      systemImage: "questionmark.circle")
+                    .font(.caption).foregroundStyle(.orange)
+            } else if hotKeyConfirmed {
+                Label("\(hotKeyLabel) está chegando no ClipBar.", systemImage: "checkmark.circle")
+                    .font(.caption).foregroundStyle(.green)
             } else {
                 Text("Este é o único atalho que vale fora do app.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -649,17 +671,24 @@ struct PreferencesView: View {
         recorderError = nil
         actions.reregisterHotKey()
 
-        // Registration fails when another app already owns the combination. Put
-        // back exactly what was working before — not the factory default, which
-        // would silently discard a shortcut chosen earlier.
+        // Only catches this app registering the same key twice. It does *not*
+        // catch another app holding the combination — macOS accepts duplicates
+        // across processes and returns noErr to both.
         if !HotKey.lastRegistrationSucceeded {
             Preferences.hotKeyCode = previous.0
             Preferences.hotKeyModifiers = previous.1
             Preferences.hotKeyLabel = previous.2
             hotKeyLabel = previous.2
             actions.reregisterHotKey()
-            recorderError = "Outro app já usa \(label). Continua valendo \(previous.2)."
+            recorderError = "Não consegui registrar \(label). Continua valendo \(previous.2)."
+            return
         }
+
+        // Which is why the real check is delivery, not registration: arm the
+        // prompt and wait for the key to actually reach us.
+        recordedAt = Date()
+        awaitingHotKeyTest = true
+        hotKeyConfirmed = false
     }
 
     /// Combinations the system owns. Taking one of these breaks something the
