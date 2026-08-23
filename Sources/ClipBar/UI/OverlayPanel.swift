@@ -2,9 +2,14 @@ import AppKit
 
 /// The bar that slides up from the bottom of the screen.
 ///
-/// The whole point of the panel (rather than a plain NSWindow) is
-/// `.nonactivatingPanel`: it takes keyboard focus without activating ClipBar,
-/// so the app you copied from stays frontmost and the paste lands there.
+/// A panel rather than a plain NSWindow so it can sit at `.statusBar` level over
+/// other apps and join every Space without ever becoming the main window.
+///
+/// `.nonactivatingPanel` is *not* here to keep ClipBar in the background —
+/// OverlayController activates the app on purpose, because a panel that never
+/// activates gets no key events while another app is frontmost, which kills
+/// Escape and type-to-search. Focus returns to the previous app on dismiss, and
+/// that is what makes paste land in the right window.
 final class OverlayPanel: NSPanel {
     /// Called on Escape. Handled here rather than in SwiftUI: a borderless
     /// panel's hosting view never becomes first responder on its own, so

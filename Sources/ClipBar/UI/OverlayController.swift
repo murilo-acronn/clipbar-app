@@ -57,7 +57,16 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let panel = self.panel ?? makePanel(frame: frame)
         panel.setFrame(frame, display: false)
 
-        NSApp.activate()
+        // Deliberately the deprecated forced variant. Its macOS 14 replacement,
+        // NSApp.activate(), is cooperative: AppKit states outright that the
+        // framework does not guarantee activation at all, and that the frontmost
+        // app is expected to call yieldActivationToApplication: first. A global
+        // hotkey gives that app no reason to yield, so while the user is typing
+        // somewhere else the request is silently refused, the panel never holds
+        // key status, and windowDidResignKey below dismisses it — measured as the
+        // bar flickering once and vanishing. Activation from the Finder desktop
+        // worked only because nothing was contending for it.
+        NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(panel.contentView)
 
