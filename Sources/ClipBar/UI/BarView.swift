@@ -22,6 +22,12 @@ struct BarView: View {
     @State private var lastTapIndex: Int?
     @State private var lastTapTime: Date = .distantPast
 
+    /// The search caret is drawn by hand (see `searchField`), so its blink has to
+    /// be driven by hand too. 0.53s is the cadence AppKit uses for a real one; a
+    /// caret that just sits there lit reads as a frozen UI rather than a cursor.
+    @State private var caretLit = true
+    private let caretBlink = Timer.publish(every: 0.53, on: .main, in: .common).autoconnect()
+
     var body: some View {
         ZStack {
             VisualEffectBackground()
@@ -141,10 +147,10 @@ struct BarView: View {
 
             // Not an NSTextField: focus inside a borderless panel is fragile, so
             // OverlayController routes every keystroke straight here. The caret
-            // is drawn whenever the bar is browsing because that is the truth —
-            // this field is never *not* taking input, so there is nothing to
-            // click into. Clicking used to clear the search, which is the
-            // opposite of what clicking a search field should do.
+            // is drawn (and blinked) by us whenever the bar is browsing, because
+            // that is the truth — this field is never *not* taking input, so
+            // there is nothing to click into. Clicking used to clear the search,
+            // which is the opposite of what clicking a search field should do.
             HStack(spacing: 2) {
                 Text(model.search)
                     .font(.system(size: 13))
@@ -153,6 +159,11 @@ struct BarView: View {
                     Rectangle()
                         .fill(Color.accentColor)
                         .frame(width: 1.5, height: 15)
+                        .opacity(caretLit ? 1 : 0)
+                        .onReceive(caretBlink) { _ in caretLit.toggle() }
+                        // Typing relights it: a real caret stays solid while the
+                        // user types instead of blinking out mid-word.
+                        .onChange(of: model.search) { _, _ in caretLit = true }
                 }
                 if model.search.isEmpty {
                     Text("buscar por nome ou conteúdo…")
