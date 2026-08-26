@@ -22,11 +22,6 @@ struct BarView: View {
     @State private var lastTapIndex: Int?
     @State private var lastTapTime: Date = .distantPast
 
-    /// The search caret is drawn by hand (see `searchField`), so its blink has to
-    /// be driven by hand too. 0.53s is the cadence AppKit uses for a real one; a
-    /// caret that just sits there lit reads as a frozen UI rather than a cursor.
-    @State private var caretLit = true
-    private let caretBlink = Timer.publish(every: 0.53, on: .main, in: .common).autoconnect()
 
     var body: some View {
         ZStack {
@@ -156,14 +151,7 @@ struct BarView: View {
                     .font(.system(size: 13))
                     .lineLimit(1)
                 if model.mode == .browsing {
-                    Rectangle()
-                        .fill(Color.accentColor)
-                        .frame(width: 1.5, height: 15)
-                        .opacity(caretLit ? 1 : 0)
-                        .onReceive(caretBlink) { _ in caretLit.toggle() }
-                        // Typing relights it: a real caret stays solid while the
-                        // user types instead of blinking out mid-word.
-                        .onChange(of: model.search) { _, _ in caretLit = true }
+                    SearchCaret(relightOn: model.search)
                 }
                 if model.search.isEmpty {
                     Text("buscar por nome ou conteúdo…")
@@ -559,4 +547,30 @@ struct VisualEffectBackground: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+}
+
+/// The search caret, drawn and blinked by hand because the field it belongs to is
+/// not an NSTextField (see `BarView.searchField`).
+///
+/// It lives in its own View for a reason that cost a bug: the blink is a state
+/// change twice a second, and while that state sat on BarView it invalidated the
+/// whole bar on every tick. An open context menu is rebuilt along with the body
+/// that declares it, so the "Mover para" menu closed under the pointer. Keeping
+/// the timer down here means a tick repaints 1.5x15 points and nothing else.
+private struct SearchCaret: View {
+    /// Changing this relights the caret: a real one stays solid while the user
+    /// types rather than blinking out mid-word.
+    let relightOn: String
+
+    @State private var lit = true
+    private let blink = Timer.publish(every: 0.53, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.accentColor)
+            .frame(width: 1.5, height: 15)
+            .opacity(lit ? 1 : 0)
+            .onReceive(blink) { _ in lit.toggle() }
+            .onChange(of: relightOn) { _, _ in lit = true }
+    }
 }
