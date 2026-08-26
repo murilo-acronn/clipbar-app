@@ -16,21 +16,35 @@ enum Crypto {
     }
 
     private static let service = "io.local.clipbar"
-    private static let account = "db-key-v1"
+
+    /// Where the key lives now, and where it used to live. See `loadKey` for why
+    /// it moved and why the old entry is left behind rather than deleted.
+    private static let account = "db-key-v2"
+    private static let legacyAccount = "db-key-v1"
 
     private static var cached: SymmetricKey?
 
+    /// The cache is read from the main thread and filled from a background one
+    /// during warm-up, so it needs a lock. Contention is a non-issue: it is held
+    /// for a dictionary read after the first call.
+    private static let lock = NSLock()
+
     static func key() throws -> SymmetricKey {
+        lock.lock()
+        defer { lock.unlock() }
         if let cached { return cached }
         let key = try loadKey() ?? createKey()
         cached = key
         return key
     }
 
+
     /// Diagnostics run from a terminal, which may not inherit the app's
     /// Keychain identity. The self-test uses a process-local key so it can test
     /// encryption without reading or creating production credentials.
     static func useEphemeralKeyForSelfTest() {
+        lock.lock()
+        defer { lock.unlock() }
         cached = SymmetricKey(size: .bits256)
     }
 
@@ -67,7 +81,54 @@ enum Crypto {
 
     // MARK: - Keychain
 
+    /// True while the key still lives only under the old account.
+    ///
+    /// Asks for attributes and not data, which is what keeps it from raising the
+    /// very dialog the migration exists to get rid of.
+    static var needsKeyMigration: Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecItemNotFound
+    }
+
+    /// Reads the key, re-filing it under the current account the first time.
+    ///
+    /// The old entry was created by an ad-hoc signed build, before this app had
+    /// a stable signing certificate. A Keychain item's ACL records the
+    /// *designated requirement* of whichever app created it, and an ad-hoc
+    /// requirement is the code hash — which changed on the next compile, and on
+    /// every compile since. So every launch, reading the key raised an
+    /// authorization dialog: `SecurityAgent` spawned with `bringForward=0`, sat
+    /// invisible behind the windows, and the app waited on it. Nine seconds on a
+    /// good run, a minute when nobody stumbled into answering it. That wait, on
+    /// the first ⌘⌥V after a launch, is the whole of "the shortcut opens the bar
+    /// sometimes".
+    ///
+    /// Re-adding the same key under a new account rebuilds the ACL around the
+    /// certificate-based requirement, which is exactly the one designed to
+    /// survive rebuilds. The old entry is deliberately left alone: it costs one
+    /// Keychain row, and until the new one is proven it is the only copy of the
+    /// key that can read this database.
     private static func loadKey() throws -> SymmetricKey? {
+        if let current = try loadKey(account: account) { return current }
+
+        guard let legacy = try loadKey(account: legacyAccount) else { return nil }
+        do {
+            try store(legacy, account: account)
+            Log.store.notice("database key re-filed under \(account, privacy: .public)")
+        } catch {
+            // Not fatal — we have the key, and the worst case is being asked
+            // again on the next launch, which is where we already were.
+            Log.store.error("could not re-file the database key: \(String(describing: error), privacy: .public)")
+        }
+        return legacy
+    }
+
+    private static func loadKey(account: String) throws -> SymmetricKey? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -91,6 +152,11 @@ enum Crypto {
 
     private static func createKey() throws -> SymmetricKey {
         let key = SymmetricKey(size: .bits256)
+        try store(key, account: account)
+        return key
+    }
+
+    private static func store(_ key: SymmetricKey, account: String) throws {
         let data = key.withUnsafeBytes { Data($0) }
 
         let item: [String: Any] = [
@@ -104,6 +170,5 @@ enum Crypto {
         ]
         let status = SecItemAdd(item as CFDictionary, nil)
         guard status == errSecSuccess else { throw Failure.keychain(status) }
-        return key
     }
 }

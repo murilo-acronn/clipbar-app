@@ -39,6 +39,38 @@ final class BlobStore {
         try? FileManager.default.removeItem(at: url(for: relativePath))
     }
 
+    /// Deletes every blob no row points at, and answers how many went.
+    ///
+    /// Files younger than the grace period are left alone on purpose: a link
+    /// preview writes its image before the row that references it is updated,
+    /// and a sweep landing in that gap would delete a blob that is about to
+    /// become live.
+    func sweepOrphans(keeping referenced: Set<String>, graceInterval: TimeInterval = 300) -> Int {
+        let manager = FileManager.default
+        guard let walker = manager.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey]
+        ) else { return 0 }
+
+        let cutoff = Date().addingTimeInterval(-graceInterval)
+        var removed = 0
+
+        for case let url as URL in walker {
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .contentModificationDateKey])
+            guard values?.isDirectory == false else { continue }
+            guard let modified = values?.contentModificationDate, modified < cutoff else { continue }
+
+            // Paths are stored as "<shard>/<name>", which is exactly the last two
+            // components of the file's own path.
+            let relative = url.pathComponents.suffix(2).joined(separator: "/")
+            guard !referenced.contains(relative) else { continue }
+
+            try? manager.removeItem(at: url)
+            removed += 1
+        }
+        return removed
+    }
+
     func size(_ relativePath: String) -> Int {
         let values = try? url(for: relativePath).resourceValues(forKeys: [.fileSizeKey])
         return values?.fileSize ?? 0

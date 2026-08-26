@@ -83,14 +83,10 @@ struct CardView: View {
 
             Spacer(minLength: 2)
 
-            if let pinboardName {
-                Text(pinboardName)
-                    .font(.system(size: 10, weight: .semibold))
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Color.black.opacity(0.25), in: Capsule())
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-            }
+            // The pinboard name used to sit here, between the headline and the
+            // app icon, and it ate the headline: "senha nore…" instead of the
+            // name the user typed. The header has one job — say what this is —
+            // and the badge says where it lives, which the footer has room for.
 
             if let icon = AppIcons.icon(forBundleID: item.sourceBundleID) {
                 Image(nsImage: icon)
@@ -136,8 +132,8 @@ struct CardView: View {
         .lineLimit(9)
         .multilineTextAlignment(.leading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(.horizontal, 10)
-        .padding(.top, 8)
+        .padding(.horizontal, showsFullBleedColour ? 0 : 10)
+        .padding(.top, showsFullBleedColour ? 0 : 8)
         .clipped()
     }
 
@@ -239,16 +235,38 @@ struct CardView: View {
         return String(paths[0])
     }
 
+    /// A colour card *is* the colour, edge to edge — which is why `body_` drops
+    /// its padding for this one case. A small swatch floating in a padded box
+    /// reads as a picture of a colour; the point is to see the colour itself.
+    private var showsFullBleedColour: Bool {
+        item.kind == .color && NSColor(hex: item.preview) != nil
+    }
+
     @ViewBuilder
     private var colorSwatch: some View {
         if let color = NSColor(hex: item.preview) {
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color(nsColor: color))
-                .frame(height: 64)
-                .overlay(Text(item.preview).font(.system(size: 11, design: .monospaced)))
+            Color(nsColor: color)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .overlay(
+                    Text(item.preview.uppercased())
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Self.readableInk(on: color))
+                        .padding(.horizontal, 9).padding(.vertical, 4)
+                        .background(.ultraThinMaterial, in: Capsule())
+                )
         } else {
             Text(item.preview).font(.system(size: 12))
         }
+    }
+
+    /// Black on light colours, white on dark ones. One fixed ink colour is
+    /// unreadable over half of any palette.
+    private static func readableInk(on color: NSColor) -> Color {
+        guard let srgb = color.usingColorSpace(.sRGB) else { return .white }
+        let luminance = 0.2126 * srgb.redComponent
+            + 0.7152 * srgb.greenComponent
+            + 0.0722 * srgb.blueComponent
+        return luminance > 0.6 ? .black : .white
     }
 
     private var footer: some View {
@@ -260,10 +278,24 @@ struct CardView: View {
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(Color.white.opacity(0.10), in: Capsule())
             }
-            Spacer()
+            if let pinboardName {
+                HStack(spacing: 4) {
+                    Circle().fill(accent).frame(width: 6, height: 6)
+                    Text(pinboardName)
+                        .font(.system(size: 10, weight: .semibold))
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(Color.white.opacity(0.10), in: Capsule())
+                .layoutPriority(1)
+            }
+
+            Spacer(minLength: 4)
+
             Text(footerText)
                 .font(.system(size: 11))
                 .opacity(0.55)
+                .lineLimit(1)
         }
         .padding(.horizontal, 10)
         .frame(height: 26)

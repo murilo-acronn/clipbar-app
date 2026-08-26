@@ -5,13 +5,71 @@ enum Diagnostics {
         case assertion(String)
     }
 
+    /// What the running app knows about its own shortcut, in the words the user
+    /// will need when the bar "stops opening".
+    ///
+    /// Written to be read at the moment of failure, from the menu bar, which is
+    /// the one part of the app that keeps working when the shortcut does not.
+    /// Every line here answers a question that otherwise costs a whole session:
+    /// whether the key is even reaching the process, and whether something else
+    /// on the system is holding the keyboard.
+    static func hotKeyReport() -> String {
+        let fired: String
+        if let last = HotKey.lastFiredAt {
+            let seconds = Int(Date().timeIntervalSince(last))
+            fired = seconds < 60 ? "há \(seconds)s" : "há \(seconds / 60) min"
+        } else {
+            fired = "nunca, desde que o app abriu"
+        }
+
+        return """
+        Atalho configurado: \(Preferences.hotKeyLabel)
+        Registro no sistema: \(HotKey.lastRegistrationSucceeded ? "aceito" : "RECUSADO")
+        A tecla chegou no ClipBar: \(fired)
+        Entrada segura do teclado: \(HotKey.secureInputIsActive ? "ATIVA" : "desligada")
+        Acessibilidade (colar sozinho): \(AXIsProcessTrusted() ? "autorizada" : "não autorizada")
+        """
+    }
+
+    /// The part of the report that only means something when it is bad.
+    static func hotKeyAdvice() -> String {
+        if HotKey.secureInputIsActive {
+            return """
+            Algum app está com a entrada segura do teclado ligada, e enquanto \
+            estiver o macOS não entrega atalhos globais a mais ninguém — o ClipBar \
+            inclusive. Costuma ser um campo de senha aberto, ou um Terminal com \
+            "Entrada Segura no Teclado" marcada no menu. Feche esse campo ou \
+            desmarque a opção; o atalho volta sozinho.
+            """
+        }
+        if HotKey.lastFiredAt == nil {
+            return """
+            A tecla nunca chegou até aqui. Ou outro app está capturando a mesma \
+            combinação — o macOS deixa dois apps registrarem a mesma tecla e \
+            entrega só para um —, ou ela simplesmente não foi apertada ainda. \
+            Teste agora: se a barra não abrir e esta linha continuar igual, é \
+            conflito, e o caminho é escolher outra combinação nas Preferências.
+            """
+        }
+        return """
+        A tecla está chegando. Se mesmo assim a barra não aparece, o problema é \
+        na exibição do painel e não no atalho — o rastro completo sai com \
+        log stream --predicate 'subsystem == "io.local.clipbar"'.
+        """
+    }
+
     /// Reports why auto-paste might not be firing, and how search sees an item.
     static func checkPermissions() {
         let trusted = AXIsProcessTrusted()
         print("""
         Acessibilidade (colar automático): \(trusted ? "✅ autorizado" : "❌ NÃO autorizado")
         Colar automático nas preferências: \(Preferences.autoPasteEnabled ? "ligado" : "desligado")
+        Entrada segura do teclado: \(HotKey.secureInputIsActive ? "⚠️ ATIVA — nenhum atalho global é entregue" : "desligada")
         Binário: \(Bundle.main.bundlePath)
+
+        Sobre o atalho, este comando não tem o que dizer: ele roda num processo
+        novo, que não registrou atalho nenhum. Quem sabe se a tecla está chegando
+        é o app que está aberto — menu do ClipBar › "Diagnóstico do atalho…".
         """)
 
         if !trusted {
@@ -152,12 +210,41 @@ enum Diagnostics {
             throw SelfTestFailure.assertion("exclusão de pasta preserva itens")
         }
 
+        try checkLinkPreviewsRefuseCredentials()
         try checkClipboardViewShowsEverything(store: store, pinboardID: boardA)
         try checkSharedBlobSurvivesOneDelete(store: store, blobs: blobs, pinboardID: boardA)
     }
 
     /// The clipboard view lists filed items too, copying already-filed content
     /// must not create a twin, and using something must float it to the top.
+    /// The failure this guards against is silent and permanent — a preview GET
+    /// spending a one-time link — so both directions are pinned down here.
+    private static func checkLinkPreviewsRefuseCredentials() throws {
+        let refused = [
+            "https://app.exemplo.com/login?token=aGVsbG8td29ybGQtdGhpcy1pcy1sb25n",
+            "https://exemplo.com/reset/9f3c1d2e4b5a6c7d8e9f0a1b2c3d4e5f",
+            "https://exemplo.com/convite?code=abc123",
+            "https://user:senha@exemplo.com/",
+            "https://exemplo.com/entrar#access_token=abc",
+        ]
+        for raw in refused {
+            guard let url = URL(string: raw), LinkPreviewService.carriesCredential(url) else {
+                throw SelfTestFailure.assertion("prévia de link não pode visitar \(raw)")
+            }
+        }
+
+        let allowed = [
+            "https://exemplo.com/artigo/como-fazer-pao",
+            "https://exemplo.com/busca?q=pao&page=2",
+            "https://exemplo.com",
+        ]
+        for raw in allowed {
+            guard let url = URL(string: raw), !LinkPreviewService.carriesCredential(url) else {
+                throw SelfTestFailure.assertion("prévia de link recusou um link comum: \(raw)")
+            }
+        }
+    }
+
     private static func checkClipboardViewShowsEverything(store: Store, pinboardID: Int64) throws {
         let text = "usado a partir da pasta"
         let fingerprint = try Crypto.fingerprint(Data(text.utf8))

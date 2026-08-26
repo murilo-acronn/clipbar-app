@@ -121,8 +121,12 @@ struct BarView: View {
                             model.setPinboardColor(hex, for: id)
                         } label: {
                             let current = model.pinboards.first { $0.id == id }?.color
-                            Text("\(current?.caseInsensitiveCompare(hex) == .orderedSame ? "✓ " : "    ")"
-                                 + BarViewModel.paletteNames[index])
+                            let isCurrent = current?.caseInsensitiveCompare(hex) == .orderedSame
+                            Label {
+                                Text("\(isCurrent ? "✓ " : "    ")" + BarViewModel.paletteNames[index])
+                            } icon: {
+                                Image(nsImage: BarView.swatch(hex))
+                            }
                         }
                     }
                 }
@@ -283,7 +287,11 @@ struct BarView: View {
         } else {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
+                    // Lazy, and that is not a detail: a plain HStack builds every
+                    // card in the list, and building a card decodes its thumbnail.
+                    // With five hundred rows in the clipboard view that was six
+                    // seconds of work to show the four cards that fit on screen.
+                    LazyHStack(spacing: 12) {
                         ForEach(Array(model.visible.enumerated()), id: \.element.id) { index, item in
                             CardView(item: item,
                                      isSelected: model.isSelected(index),
@@ -324,6 +332,20 @@ struct BarView: View {
                     .padding(.horizontal, 2)
                     .padding(.vertical, 3)
                 }
+                // A rebuilt list gets a brand new scroll view, which starts at
+                // the beginning because that is where a scroll view starts.
+                // Without this the panel is reused between openings and keeps
+                // last time's scroll offset, so a freshly copied item sat off
+                // screen to the left and the bar looked like it had lost it.
+                //
+                // The obvious alternative — telling the proxy to scrollTo the
+                // selection on every reload — was tried and broke the bar
+                // outright: repeatedly asking a LazyHStack to centre an index it
+                // cannot centre (index 0 has nothing to its left) wedged the
+                // container, and from the second opening onward the panel came
+                // up completely blank. Nothing here is a command, so nothing
+                // here can wedge.
+                .id(model.revision)
                 .onChange(of: model.selection) { _, new in
                     withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(new, anchor: .center) }
                 }
@@ -377,6 +399,7 @@ struct BarView: View {
             hint("⌘R", "renomear")
             hint("⌘P", "mover")
             hint("⌘N", "nova pasta")
+            hint("espaço", "prévia")
             hint("⌫", model.multiSelection.count > 1
                         ? "apagar \(model.multiSelection.count)"
                         : "apagar")
@@ -507,6 +530,28 @@ struct BarView: View {
     }
 
     // MARK: - Helpers
+
+    /// A filled dot, as an image, for the "Cor da pasta" menu.
+    ///
+    /// An image rather than a `Circle()`: an AppKit menu row draws `Text` and
+    /// `Image` and nothing else, so a shape in the label comes out blank. And
+    /// explicitly not a template image — templates get recoloured to the menu's
+    /// own ink, which would repaint every dot the same grey and throw away the
+    /// only thing this icon is here to say.
+    private static func swatch(_ hex: String) -> NSImage {
+        if let cached = swatchCache[hex] { return cached }
+
+        let image = NSImage(size: NSSize(width: 12, height: 12), flipped: false) { rect in
+            (NSColor(hex: hex) ?? .systemBlue).setFill()
+            NSBezierPath(ovalIn: rect.insetBy(dx: 0.5, dy: 0.5)).fill()
+            return true
+        }
+        image.isTemplate = false
+        swatchCache[hex] = image
+        return image
+    }
+
+    private static var swatchCache: [String: NSImage] = [:]
 
     private func color(_ hex: String) -> Color {
         Color(nsColor: NSColor(hex: hex) ?? .systemBlue)

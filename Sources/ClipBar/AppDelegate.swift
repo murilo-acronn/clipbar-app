@@ -41,6 +41,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             monitor.onChange = { [weak overlay] in overlay?.reloadIfVisible() }
             registerHotKey()
 
+            // Next run loop pass, so the menu bar icon paints first. See
+            // OverlayController.warmUp for what this is buying and what it cost
+            // not to have it.
+            DispatchQueue.main.async { [weak overlay] in overlay?.warmUp() }
+
             preferencesController = PreferencesController(actions: PreferencesActions(
                 reregisterHotKey: { [weak self] in self?.registerHotKey() },
                 applyBlockedApps: { [weak self] in
@@ -66,7 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             welcomeController?.showIfFirstLaunch()
         } catch {
-            NSLog("ClipBar: could not open the store — \(error)")
+            Log.store.error("could not open the store — \(String(describing: error), privacy: .public)")
             presentFatal(error)
             return
         }
@@ -86,6 +91,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         openMenuItem = open
         refreshOpenMenuItem()
         menu.addItem(withTitle: "Itens guardados…", action: #selector(showCounts), keyEquivalent: "")
+            .target = self
+        // Reachable exactly when the shortcut is not, which is the only moment
+        // anyone wants it.
+        menu.addItem(withTitle: "Diagnóstico do atalho…", action: #selector(showHotKeyDiagnostics),
+                     keyEquivalent: "")
             .target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Preferências…", action: #selector(openPreferences), keyEquivalent: ",")
@@ -110,6 +120,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         orphans += (try? store.pruneHistory(keeping: Preferences.historyLimit)) ?? []
         orphans += (try? store.pruneHistory(olderThanDays: Preferences.historyRetentionDays)) ?? []
         for path in orphans { blobs?.delete(path) }
+
+        // Reference counting only frees a blob when the row that owns it is
+        // deleted through the app. A crash, a force-quit or a failed write
+        // between "file on disk" and "row in the database" leaves a file nobody
+        // will ever ask about again — 19 MB of them had piled up before anything
+        // went looking. Nothing else in the app ever revisits the directory, so
+        // this sweep is the only thing that can notice.
+        if let blobs, let referenced = try? store.referencedBlobPaths() {
+            let freed = blobs.sweepOrphans(keeping: referenced)
+            if freed > 0 { Log.store.notice("swept \(freed, privacy: .public) unreferenced blobs") }
+        }
+
         overlay?.reloadIfVisible()
     }
 
@@ -138,9 +160,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.overlay?.toggle()
         }
         if hotKey == nil {
-            NSLog("ClipBar: could not register the global hotkey (already taken?)")
+            Log.hotKey.error("RegisterEventHotKey refused the combination")
         }
         refreshOpenMenuItem()
+    }
+
+    @objc private func showHotKeyDiagnostics() {
+        let alert = NSAlert()
+        alert.messageText = "Diagnóstico do atalho"
+        alert.informativeText = Diagnostics.hotKeyReport() + "\n\n" + Diagnostics.hotKeyAdvice()
+        alert.addButton(withTitle: "Fechar")
+        alert.addButton(withTitle: "Abrir Preferências…")
+        NSApp.activate()
+        if alert.runModal() == .alertSecondButtonReturn {
+            preferencesController?.show()
+        }
     }
 
     @objc private func showCounts() {

@@ -6,3 +6,8 @@ build/
 # Sons copiados do Paste para uso local. Asset proprietário — nunca versionar.
 # Os sons próprios do ClipBar (gerados por scripts/make-sounds.py) ficam versionados.
 Resources/Sounds/Paste *.aiff
+
+# Bloco de notas pessoal e os prints colados nele. O próprio arquivo diz que não
+# é versionado; isto garante que ele não entre por acidente num `git add .`.
+MELHORIAS.md
+image*.png

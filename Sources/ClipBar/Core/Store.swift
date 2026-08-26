@@ -321,12 +321,19 @@ final class Store {
 
     /// Every item, whichever pinboard it sits in. Backs global search: you
     /// rarely remember which board you filed something in.
+    /// Everything, in the same order the clipboard tab uses.
+    ///
+    /// Same order deliberately: this backs the global search, and ordering it by
+    /// `created_at` alone put an old item you used this morning at the top of the
+    /// tab and near the bottom of the search for the very same word.
     func allItems(limit: Int = 5000) throws -> [ClipItem] {
         try query("""
             SELECT id, kind, title, preview, fingerprint, blob_path, byte_size, char_count,
                    source_bundle_id, source_name, created_at, last_used_at, pinboard_id,
                    title_is_custom, link_title, link_image_path, link_domain
-            FROM items ORDER BY created_at DESC LIMIT ?
+            FROM items
+            ORDER BY MAX(created_at, IFNULL(last_used_at, created_at)) DESC
+            LIMIT ?
             """, bind: { sqlite3_bind_int64($0, 1, Int64(limit)) })
     }
 
@@ -417,6 +424,17 @@ final class Store {
     }
 
     /// Loose history only: pinned items are never swept.
+    /// Every blob path any row still points at. What is on disk and not in here
+    /// is dead weight — see `BlobStore.sweepOrphans`.
+    func referencedBlobPaths() throws -> Set<String> {
+        var paths: Set<String> = []
+        try step("SELECT blob_path, link_image_path FROM items", row: { stmt in
+            if let path = Self.text(stmt, 0) { paths.insert(path) }
+            if let path = Self.text(stmt, 1) { paths.insert(path) }
+        })
+        return paths
+    }
+
     func looseItemCount() throws -> Int {
         var total = 0
         try step("SELECT COUNT(*) FROM items WHERE pinboard_id IS NULL") {
@@ -506,7 +524,6 @@ final class Store {
         return result
     }
 
-    @discardableResult
     func setPinboardColor(id: Int64, color: String) throws {
         try exec("UPDATE pinboards SET color = ? WHERE id = ?") { stmt in
             sqlite3_bind_text(stmt, 1, color, -1, SQLITE_TRANSIENT)

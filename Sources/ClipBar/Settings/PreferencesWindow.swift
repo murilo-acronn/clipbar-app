@@ -350,7 +350,9 @@ struct PreferencesView: View {
         Section("Links") {
             Toggle("Buscar título e imagem dos links", isOn: $linkPreviews)
                 .onChange(of: linkPreviews) { _, new in Preferences.linkPreviewsEnabled = new }
-            Text("Desligado por padrão. Quando ligado, copiar um link consulta aquele site para montar a prévia; o endereço pode aparecer nos logs do servidor visitado.")
+            Text("Desligado por padrão. Quando ligado, copiar um link consulta aquele site para montar a prévia; o endereço pode aparecer nos logs do servidor visitado, e o ClipBar passa a carregar um motor web, que é a parte mais pesada do app.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("Links que parecem carregar credencial — token, código, convite, redefinição de senha — nunca são visitados, para que a prévia não gaste um link de uso único.")
                 .font(.caption).foregroundStyle(.secondary)
         }
 
@@ -453,6 +455,7 @@ struct PreferencesView: View {
         ("⇥ · ↑ ↓", "Trocar de pasta"),
         ("⏎", "Colar no app anterior"),
         ("⌘1–⌘9", "Colar direto o card N"),
+        ("espaço", "Prévia grande da imagem selecionada"),
         ("⌘C", "Copiar sem colar"),
         ("⌘R", "Dar um nome ao card"),
         ("⌘P", "Mover para outra pasta"),

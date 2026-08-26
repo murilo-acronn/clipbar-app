@@ -6,9 +6,6 @@ enum Paster {
     /// Writes the item to the general pasteboard.
     static func place(_ item: ClipItem, blobs: BlobStore, monitor: ClipboardMonitor?) {
         let pasteboard = NSPasteboard.general
-        // Our own write bumps changeCount; without this the item we just pasted
-        // would be re-captured as a fresh copy.
-        monitor?.ignoreNextChange = true
         pasteboard.clearContents()
 
         switch item.kind {
@@ -26,6 +23,14 @@ enum Paster {
         default:
             pasteboard.setString(item.preview, forType: .string)
         }
+
+        // Our own write bumps changeCount, and without telling the monitor which
+        // bump was ours the item we just pasted comes straight back in as a
+        // fresh copy. Recorded after the writes, not before: only clearContents
+        // moves the counter, so this is exactly the value the poll will see —
+        // and, unlike a "skip the next change" flag, it cannot swallow something
+        // the user copied in the 200 ms before the poll ran.
+        monitor?.ignoredChangeCount = pasteboard.changeCount
     }
 
     static var canAutoPaste: Bool {

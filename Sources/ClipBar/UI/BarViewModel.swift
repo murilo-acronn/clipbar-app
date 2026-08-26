@@ -28,6 +28,7 @@ final class BarViewModel: ObservableObject {
     /// Highlighted destination while moving. Digits 1-9 are a shortcut, but the
     /// pinboard list outgrew them long ago — arrows have to reach the rest.
     @Published var moveSelection = 0
+
     @Published var search = "" {
         didSet { guard search != oldValue else { return }; refilter() }
     }
@@ -38,8 +39,23 @@ final class BarViewModel: ObservableObject {
         didSet { guard kindFilter != oldValue else { return }; refilter() }
     }
 
+    /// Bumped every time the list is rebuilt.
+    ///
+    /// The card row is a ScrollView living inside a panel that is reused from one
+    /// opening to the next, so it keeps the scroll offset it had last time. Open
+    /// the bar, scroll to the right, close it, copy something, open it again —
+    /// the new item is at the far left, off screen, and the bar looks exactly
+    /// like it lost the copy. The view watches this to put the viewport back on
+    /// the selection whenever the list underneath it changes.
+    @Published private(set) var revision = 0
+
     private var loaded: [ClipItem] = []
-    private var everything: [ClipItem] = []
+
+    /// Every item, each paired with the text a search matches against, folded
+    /// once here instead of once per keystroke. Search runs over the whole
+    /// history on every character typed; folding hundreds of previews each time
+    /// was the only part of it with a cost worth naming.
+    private var everything: [(item: ClipItem, haystack: String)] = []
     private let store: Store
     private let blobs: BlobStore?
     private var editingPinboardID: Int64?
@@ -73,10 +89,20 @@ final class BarViewModel: ObservableObject {
     // MARK: - Loading
 
     func reload() {
+        revision &+= 1
         pinboards = (try? store.pinboards()) ?? []
         loaded = (try? store.items(pinboardID: activePinboardID)) ?? []
-        everything = (try? store.allItems()) ?? []
+        everything = ((try? store.allItems()) ?? []).map { ($0, Self.haystack(for: $0)) }
         refilter()
+    }
+
+    /// Everything a search is allowed to match: the name the user gave the item,
+    /// its contents, where it came from, and a link's own title and domain.
+    private static func haystack(for item: ClipItem) -> String {
+        [item.title ?? "", item.preview, item.sourceName ?? "",
+         item.linkTitle ?? "", item.linkDomain ?? ""]
+            .joined(separator: " ")
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
     }
 
     /// True while a search is showing results from outside the open pinboard.
@@ -115,17 +141,13 @@ final class BarViewModel: ObservableObject {
         // filing something away shouldn't hide it when you search for it.
         // Match on each whitespace-separated term so "contrato modelo" finds
         // an item titled "Contrato — modelo 2026".
-        let terms = query.split(separator: " ").map(String.init)
-        visible = everything.filter { item in
-            guard kindFilter.isEmpty || kindFilter.contains(item.kind) else { return false }
-            let haystack = [item.title ?? "", item.preview, item.sourceName ?? "",
-                            item.linkTitle ?? "", item.linkDomain ?? ""]
-                .joined(separator: " ")
-                .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
-            return terms.allSatisfy { term in
-                haystack.contains(term.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil))
-            }
+        let terms = query.split(separator: " ").map {
+            String($0).folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
         }
+        visible = everything.filter { entry in
+            guard kindFilter.isEmpty || kindFilter.contains(entry.item.kind) else { return false }
+            return terms.allSatisfy { entry.haystack.contains($0) }
+        }.map(\.item)
         selection = min(selection, max(visible.count - 1, 0))
     }
 

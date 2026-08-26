@@ -15,9 +15,48 @@ final class LinkPreviewService {
         self.blobs = blobs
     }
 
+    /// Whether visiting this URL could spend something.
+    ///
+    /// Building a preview means a GET from this machine, and some links are
+    /// consumed by being visited: a sign-in link from an email, a password
+    /// reset, a one-time invite. Copying one of those and having the preview
+    /// burn it is silent and unrecoverable — the user only finds out when the
+    /// link they meant to click says it has already been used.
+    ///
+    /// So this deliberately over-refuses. Guessing wrong in this direction
+    /// costs a thumbnail. Guessing wrong in the other costs someone their login.
+    static func carriesCredential(_ url: URL) -> Bool {
+        if url.user != nil || url.password != nil { return true }
+
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+
+        for item in components?.queryItems ?? [] {
+            if credentialNames.contains(item.name.lowercased()) { return true }
+            // An opaque value this long is not a search term or a page number.
+            if (item.value?.count ?? 0) >= 24 { return true }
+        }
+
+        if let fragment = components?.fragment,
+           fragment.count >= 24 || credentialNames.contains(where: { fragment.lowercased().contains($0) }) {
+            return true
+        }
+
+        // The same secret, spelled as a path: /invite/9f3c…, /reset/AbCdEf…
+        return url.pathComponents.contains { $0.count >= 24 && !$0.contains(".") }
+    }
+
+    private static let credentialNames: Set<String> = [
+        "token", "access_token", "id_token", "refresh_token", "auth", "authorization",
+        "code", "key", "apikey", "api_key", "secret", "signature", "sig",
+        "otp", "passcode", "password", "pwd", "magic", "invite", "invitation",
+        "reset", "confirm", "confirmation", "verify", "verification",
+        "session", "sid", "jwt", "ticket", "nonce", "state",
+    ]
+
     func fetch(itemID: Int64, url: URL) {
         guard Preferences.linkPreviewsEnabled,
               ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              !Self.carriesCredential(url),
               (try? store.needsLinkMetadata(id: itemID)) == true,
               providers[itemID] == nil
         else { return }

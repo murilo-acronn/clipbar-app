@@ -32,9 +32,13 @@ final class ClipboardMonitor {
     /// Bundle IDs we never capture from, on top of the markers above.
     var blockedBundleIDs: Set<String> = []
 
-    /// Raised while we write to the pasteboard ourselves, so pasting from
-    /// ClipBar doesn't feed straight back into the history.
-    var ignoreNextChange = false
+    /// The `changeCount` this app produced by writing to the pasteboard itself,
+    /// so pasting from ClipBar doesn't feed straight back into the history.
+    ///
+    /// A number rather than a "skip the next one" flag, because the poll runs
+    /// every 200 ms and the next change is not necessarily ours: copying
+    /// something in that window used to consume the flag and lose the copy.
+    var ignoredChangeCount: Int?
 
     var onCapture: ((ClipItem) -> Void)?
     var onChange: (() -> Void)?
@@ -69,8 +73,8 @@ final class ClipboardMonitor {
         guard current != lastChangeCount else { return }
         lastChangeCount = current
 
-        if ignoreNextChange {
-            ignoreNextChange = false
+        if current == ignoredChangeCount {
+            ignoredChangeCount = nil
             return
         }
 
@@ -89,7 +93,7 @@ final class ClipboardMonitor {
                 }
             }
         } catch {
-            NSLog("ClipBar: capture failed — \(error)")
+            Log.store.error("capture failed — \(String(describing: error), privacy: .public)")
         }
     }
 
