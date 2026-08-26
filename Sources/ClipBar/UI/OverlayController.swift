@@ -66,6 +66,14 @@ final class OverlayController: NSObject, NSWindowDelegate {
         // key status, and windowDidResignKey below dismisses it — measured as the
         // bar flickering once and vanishing. Activation from the Finder desktop
         // worked only because nothing was contending for it.
+        // Order the panel onto the *current* space before activating. Activation
+        // switches to whichever space the app already has a window on; with the
+        // panel still hidden, an accessory app has none, so macOS leaves the
+        // active full-screen space to reach ClipBar's own — measured as the bar
+        // simply never showing up while a full-screen app was in front. Ordering
+        // first (orderFrontRegardless works from an inactive app) puts a window
+        // on the space the user is looking at, and activation stays put.
+        panel.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(panel.contentView)
