@@ -127,22 +127,6 @@ do release, e quem atualiza é você, com `git pull && ./scripts/install.sh`.
 Um atualizador que troca o próprio app em execução é o código mais perigoso de um
 projeto assim, e este aqui não é notarizado nem tem como verificar o que baixou.
 
-## Migrar do Paste
-
-Se você usa o [Paste](https://pasteapp.io/), dá pra trazer as pastas:
-
-```bash
-/Applications/ClipBar.app/Contents/MacOS/ClipBar --import-paste --dry-run  # simula
-/Applications/ClipBar.app/Contents/MacOS/ClipBar --import-paste            # importa
-/Applications/ClipBar.app/Contents/MacOS/ClipBar --verify                  # confere
-```
-
-Traz as pastas com nomes e cores e tudo que está dentro delas — texto e imagens.
-O histórico solto fica pra trás de propósito: é rotatividade do dia a dia.
-
-**Não apaga nem altera nada do Paste.** Mantenha o Paste instalado por uns dias
-antes de desinstalar; ele é a sua cópia de segurança até você confiar no ClipBar.
-
 ## Assinatura
 
 Por padrão os scripts assinam ad-hoc, e isso tem um custo: o macOS amarra a
