@@ -160,7 +160,7 @@ final class Store {
             }
             // delete() already refuses to report a blob another row still uses,
             // so the filed row keeps its image.
-            _ = try delete(id: twin.loose)
+            _ = try delete(id: twin.loose, reason: "merged unfiled twin")
         }
     }
 
@@ -352,16 +352,26 @@ final class Store {
 
     /// Returns every blob path the row owned. Deleting the row alone would leave
     /// encrypted image files behind on disk forever.
+    ///
+    /// `reason` goes to the log, which is the only record a deletion leaves:
+    /// nine filed items once vanished and nothing could say which path took them.
     @discardableResult
-    func delete(id: Int64) throws -> [String] {
+    func delete(id: Int64, reason: String = "user") throws -> [String] {
         var paths: [String] = []
-        try step("SELECT blob_path, link_image_path FROM items WHERE id = ?",
+        var pinboard = "none"
+        try step("SELECT blob_path, link_image_path, pinboard_id FROM items WHERE id = ?",
                  bind: { sqlite3_bind_int64($0, 1, id) },
                  row: { stmt in
                      if let path = Self.text(stmt, 0) { paths.append(path) }
                      if let path = Self.text(stmt, 1) { paths.append(path) }
+                     if sqlite3_column_type(stmt, 2) != SQLITE_NULL {
+                         pinboard = String(sqlite3_column_int64(stmt, 2))
+                     }
                  })
         try exec("DELETE FROM items WHERE id = ?") { sqlite3_bind_int64($0, 1, id) }
+        if sqlite3_changes(db) > 0 {
+            Log.store.notice("deleted item \(id, privacy: .public) from pinboard \(pinboard, privacy: .public) — \(reason, privacy: .public)")
+        }
         return try orphaned(paths)
     }
 
@@ -377,7 +387,7 @@ final class Store {
 
         if let existing = try self.id(forFingerprint: fingerprint, pinboardID: pinboardID),
            existing != id {
-            return try delete(id: id)
+            return try delete(id: id, reason: "merged into duplicate on move")
         }
 
         // Leaving a pinboard restarts the retention clock. Without this the item
@@ -468,7 +478,7 @@ final class Store {
                 ORDER BY \(Self.recency) DESC LIMIT ?
             )
             """
-        return try prune(where: condition) { sqlite3_bind_int64($0, 1, Int64(maximum)) }
+        return try prune(where: condition, reason: "history limit \(maximum)") { sqlite3_bind_int64($0, 1, Int64(maximum)) }
     }
 
     /// Drops loose items older than `days`. Zero means "keep forever".
@@ -478,7 +488,7 @@ final class Store {
         let cutoff = Date()
             .addingTimeInterval(-Double(days) * 86_400)
             .timeIntervalSinceReferenceDate
-        return try prune(where: "pinboard_id IS NULL AND \(Self.recency) < ?") {
+        return try prune(where: "pinboard_id IS NULL AND \(Self.recency) < ?", reason: "older than \(days) days") {
             sqlite3_bind_double($0, 1, cutoff)
         }
     }
@@ -486,12 +496,12 @@ final class Store {
     /// Everything not filed in a pinboard. Pinboards survive on purpose.
     @discardableResult
     func clearLooseHistory() throws -> [String] {
-        try prune(where: "pinboard_id IS NULL") { _ in }
+        try prune(where: "pinboard_id IS NULL", reason: "history cleared") { _ in }
     }
 
     /// Collects the blob paths first, then deletes: once the rows are gone there
     /// is no way to find which files they owned.
-    private func prune(where condition: String,
+    private func prune(where condition: String, reason: String,
                        bind: @escaping (OpaquePointer?) -> Void) throws -> [String] {
         var orphans: [String] = []
         try step("SELECT blob_path, link_image_path FROM items WHERE \(condition)",
@@ -501,6 +511,10 @@ final class Store {
                      if let path = Self.text(stmt, 1) { orphans.append(path) }
                  })
         try exec("DELETE FROM items WHERE \(condition)", bind: bind)
+        let removed = sqlite3_changes(db)
+        if removed > 0 {
+            Log.store.notice("pruned \(removed, privacy: .public) loose items — \(reason, privacy: .public)")
+        }
         return try orphaned(orphans)
     }
 
@@ -579,6 +593,7 @@ final class Store {
             for itemID in itemIDs { orphans += try move(id: itemID, toPinboard: nil) }
             try exec("DELETE FROM pinboards WHERE id = ?") { sqlite3_bind_int64($0, 1, id) }
             try exec("COMMIT")
+            Log.store.notice("deleted pinboard \(id, privacy: .public), \(itemIDs.count, privacy: .public) items moved to loose history")
             return orphans
         } catch {
             try? exec("ROLLBACK")
