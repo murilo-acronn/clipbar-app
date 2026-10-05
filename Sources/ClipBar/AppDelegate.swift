@@ -18,6 +18,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         do {
             let store = try Store(url: Paths.database)
+            // Running on would show an empty bar and fail every capture, which
+            // reads exactly like "everything I saved is gone".
+            if Crypto.keyIsMissing {
+                presentFatal(Crypto.Failure.keyMissing)
+                return
+            }
             let blobs = try BlobStore(root: Paths.blobs)
             Thumbnails.blobs = blobs
             self.blobs = blobs
@@ -192,7 +198,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.alertStyle = .critical
         alert.messageText = "ClipBar não conseguiu abrir o banco"
-        alert.informativeText = "\(error)"
+        if case Crypto.Failure.keyMissing = error {
+            alert.informativeText = """
+                A chave que decifra seus itens não está no Keychain (serviço io.local.clipbar, \
+                contas db-key-v2 e db-key-v1). O ClipBar não criou uma chave nova porque isso \
+                deixaria todos os itens já guardados ilegíveis para sempre.
+
+                Procure o item no app Acesso às Chaves ou restaure o Keychain de um backup \
+                antes de abrir o ClipBar de novo. O banco não foi alterado.
+                """
+        } else {
+            alert.informativeText = "\(error)"
+        }
         alert.runModal()
         NSApp.terminate(nil)
     }

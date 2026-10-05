@@ -13,7 +13,24 @@ enum Crypto {
     enum Failure: Error {
         case keychain(OSStatus)
         case corrupted
+        /// The Keychain has no key but the database already holds sealed rows.
+        case keyMissing
     }
+
+    /// Set by `Store` once it knows whether the database is empty.
+    ///
+    /// Minting a key over a database that already has rows is the one
+    /// irreversible thing this file could do: every existing row stops
+    /// decrypting, `Store.query` skips them, and the history and every folder
+    /// look empty with no error anywhere. A Keychain reset or migration (an OS
+    /// upgrade is the likely trigger) answers "not found" exactly like a first
+    /// launch does, so "not found" alone is not enough to create one. Starts
+    /// false so nothing creates a key before a store has vouched for it.
+    static var allowsKeyCreation: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return creationAllowed }
+        set { lock.lock(); defer { lock.unlock() }; creationAllowed = newValue }
+    }
+    private static var creationAllowed = false
 
     private static let service = "io.local.clipbar"
 
@@ -33,7 +50,10 @@ enum Crypto {
         lock.lock()
         defer { lock.unlock() }
         if let cached { return cached }
-        let key = try loadKey() ?? createKey()
+        guard let key = try loadKey() ?? (creationAllowed ? createKey() : nil) else {
+            Log.store.fault("database key not found in the Keychain and the database is not empty")
+            throw Failure.keyMissing
+        }
         cached = key
         return key
     }
@@ -86,6 +106,17 @@ enum Crypto {
     /// Asks for attributes and not data, which is what keeps it from raising the
     /// very dialog the migration exists to get rid of.
     static var needsKeyMigration: Bool {
+        isAbsent(account: account)
+    }
+
+    /// True when neither account holds a key and the store says the database
+    /// is not empty — the state `key()` refuses to paper over. Attribute-only
+    /// queries, so it is safe to ask on the main thread at launch.
+    static var keyIsMissing: Bool {
+        !allowsKeyCreation && isAbsent(account: account) && isAbsent(account: legacyAccount)
+    }
+
+    private static func isAbsent(account: String) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

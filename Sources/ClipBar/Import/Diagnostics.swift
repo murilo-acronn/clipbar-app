@@ -214,6 +214,13 @@ enum Diagnostics {
         try checkClipboardViewShowsEverything(store: store, pinboardID: boardA)
         try checkSharedBlobSurvivesOneDelete(store: store, blobs: blobs, pinboardID: boardA)
         try checkRetentionSparesRecentlyTouched(store: store, pinboardID: boardA)
+
+        // Reopening a database that has rows must forbid minting a new key: a
+        // fresh key there would silently orphan every row already sealed.
+        _ = try Store(url: root.appending(path: "test.sqlite"))
+        guard !Crypto.allowsKeyCreation else {
+            throw SelfTestFailure.assertion("banco com itens não pode autorizar chave nova")
+        }
     }
 
     /// Retention must count from the last time an item was used or taken out of

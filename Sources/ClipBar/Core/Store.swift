@@ -47,6 +47,9 @@ final class Store {
         try exec("PRAGMA synchronous = NORMAL")
         try exec("PRAGMA foreign_keys = ON")
         try migrate()
+        // See Crypto.allowsKeyCreation: a missing key may only be created for a
+        // database with nothing sealed in it yet.
+        Crypto.allowsKeyCreation = try count(table: "items") == 0
 
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
