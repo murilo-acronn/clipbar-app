@@ -377,9 +377,18 @@ final class Store {
             return try delete(id: id)
         }
 
-        try exec("UPDATE items SET pinboard_id = ? WHERE id = ?") { stmt in
+        // Leaving a pinboard restarts the retention clock. Without this the item
+        // kept its original date, and the next hourly prune deleted something the
+        // user had only just taken out of a folder — or a whole folder's worth,
+        // since deletePinboard comes through here.
+        try exec("""
+            UPDATE items SET pinboard_id = ?1,
+                last_used_at = CASE WHEN ?1 IS NULL THEN ?3 ELSE last_used_at END
+            WHERE id = ?4
+            """) { stmt in
             if let pinboardID { sqlite3_bind_int64(stmt, 1, pinboardID) } else { sqlite3_bind_null(stmt, 1) }
-            sqlite3_bind_int64(stmt, 2, id)
+            sqlite3_bind_double(stmt, 3, Date().timeIntervalSinceReferenceDate)
+            sqlite3_bind_int64(stmt, 4, id)
         }
         return []
     }
@@ -443,12 +452,17 @@ final class Store {
         return total
     }
 
+    /// Retention measures the same recency the clipboard view sorts by. Keyed on
+    /// `created_at` alone, an item pasted from the bar every day — which only
+    /// bumps `last_used_at` — expired while sitting at the top of the list.
+    private static let recency = "MAX(created_at, IFNULL(last_used_at, created_at))"
+
     @discardableResult
     func pruneHistory(keeping maximum: Int) throws -> [String] {
         let condition = """
             pinboard_id IS NULL AND id NOT IN (
                 SELECT id FROM items WHERE pinboard_id IS NULL
-                ORDER BY created_at DESC LIMIT ?
+                ORDER BY \(Self.recency) DESC LIMIT ?
             )
             """
         return try prune(where: condition) { sqlite3_bind_int64($0, 1, Int64(maximum)) }
@@ -461,7 +475,7 @@ final class Store {
         let cutoff = Date()
             .addingTimeInterval(-Double(days) * 86_400)
             .timeIntervalSinceReferenceDate
-        return try prune(where: "pinboard_id IS NULL AND created_at < ?") {
+        return try prune(where: "pinboard_id IS NULL AND \(Self.recency) < ?") {
             sqlite3_bind_double($0, 1, cutoff)
         }
     }

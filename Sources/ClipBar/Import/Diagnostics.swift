@@ -213,6 +213,41 @@ enum Diagnostics {
         try checkLinkPreviewsRefuseCredentials()
         try checkClipboardViewShowsEverything(store: store, pinboardID: boardA)
         try checkSharedBlobSurvivesOneDelete(store: store, blobs: blobs, pinboardID: boardA)
+        try checkRetentionSparesRecentlyTouched(store: store, pinboardID: boardA)
+    }
+
+    /// Retention must count from the last time an item was used or taken out of
+    /// a folder, not from when it was first copied. Both failures were silent
+    /// and permanent: filed items deleted within an hour of a folder deletion.
+    private static func checkRetentionSparesRecentlyTouched(store: Store, pinboardID: Int64) throws {
+        func old(_ text: String, pinboardID: Int64?) throws -> ClipItem {
+            let longAgo = Date(timeIntervalSinceNow: -400 * 86_400)
+            return ClipItem(
+                id: nil, kind: .text, title: nil, preview: text,
+                fingerprint: try Crypto.fingerprint(Data(text.utf8)),
+                blobPath: nil, byteSize: text.utf8.count, charCount: text.count,
+                sourceBundleID: "io.local.clipbar.self-test", sourceName: "Self Test",
+                createdAt: longAgo, lastUsedAt: longAgo, pinboardID: pinboardID
+            )
+        }
+
+        let unfiled = try store.upsert(old("tirado da pasta", pinboardID: pinboardID)).id
+        _ = try store.move(id: unfiled, toPinboard: nil)
+        let used = try store.upsert(old("usado hoje", pinboardID: nil)).id
+        try store.touch(id: used)
+        let stale = try store.upsert(old("esquecido", pinboardID: nil)).id
+
+        _ = try store.pruneHistory(olderThanDays: 7)
+        let left = Set(try store.allItems().compactMap(\.id))
+        guard left.contains(unfiled) else {
+            throw SelfTestFailure.assertion("item tirado da pasta não pode expirar na hora")
+        }
+        guard left.contains(used) else {
+            throw SelfTestFailure.assertion("item usado hoje não pode expirar")
+        }
+        guard !left.contains(stale) else {
+            throw SelfTestFailure.assertion("item velho e sem uso deve expirar")
+        }
     }
 
     /// The clipboard view lists filed items too, copying already-filed content

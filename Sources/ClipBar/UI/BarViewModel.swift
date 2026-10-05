@@ -225,8 +225,15 @@ final class BarViewModel: ObservableObject {
     // MARK: - Items
 
     func deleteSelected() {
-        let ids = actionableIndices.compactMap { visible.indices.contains($0) ? visible[$0].id : nil }
+        let targets = actionableIndices.compactMap { visible.indices.contains($0) ? visible[$0] : nil }
+        let ids = targets.compactMap(\.id)
         guard !ids.isEmpty else { return }
+
+        // The clipboard view and global search list filed rows themselves, not
+        // copies, so ⌫ there deletes the item out of its folder. Inside the
+        // folder that is obviously the intent; anywhere else it has to be asked.
+        let filedElsewhere = targets.filter { $0.pinboardID != nil && $0.pinboardID != activePinboardID }
+        if !filedElsewhere.isEmpty, !confirmDeletingFiled(filedElsewhere) { return }
 
         for id in ids {
             // Drop the encrypted file too, or blobs/ grows forever with images
@@ -243,6 +250,19 @@ final class BarViewModel: ObservableObject {
         multiSelection = []
         reload()
         selection = min(landing, max(visible.count - 1, 0))
+    }
+
+    private func confirmDeletingFiled(_ items: [ClipItem]) -> Bool {
+        let names = Set(items.compactMap { pinboard(for: $0)?.name }).sorted()
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = items.count == 1
+            ? "Excluir um item guardado em pasta?"
+            : "Excluir \(items.count) itens guardados em pastas?"
+        alert.informativeText = "Está em: \(names.joined(separator: ", ")). Ele sai da pasta também, e não há como desfazer."
+        alert.addButton(withTitle: "Excluir")
+        alert.addButton(withTitle: "Cancelar")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     func beginRename() {

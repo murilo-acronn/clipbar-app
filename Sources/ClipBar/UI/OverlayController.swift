@@ -328,7 +328,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private func installKeyMonitor() {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            self?.handle(event) == true ? nil : event
+            // Local monitors keep firing inside runModal: without this, ⏎ on a
+            // confirmation alert raised from the bar would also paste.
+            guard NSApp.modalWindow == nil else { return event }
+            return self?.handle(event) == true ? nil : event
         }
         scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             self?.handleScroll(event)
