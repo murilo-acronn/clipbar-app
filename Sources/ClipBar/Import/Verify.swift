@@ -23,6 +23,10 @@ enum Verify {
         // collection now, filed rows included, so listing it alongside each
         // pinboard would check — and count — filed items twice.
         let everything = try store.allItems()
+        // allItems skips rows that fail to decrypt, so iterating it alone would
+        // report "tudo íntegro" over a database whose rows are hidden — the one
+        // case where this command matters most.
+        let hidden = try store.count(table: "items") - everything.count
         let unfiled = everything.filter { $0.pinboardID == nil }
 
         for board in [nil] + boards.map(Optional.init) {
@@ -48,12 +52,16 @@ enum Verify {
             }
         }
 
+        if hidden > 0 {
+            print("\n❌ \(hidden) linhas existem no banco mas não decifram com a chave atual — não aparecem no app")
+        }
+
         print("""
 
         ── integridade ──
         \(checked) itens verificados
-        \(badText) previews vazios · \(badBlob) blobs ilegíveis
-        \(badText == 0 && badBlob == 0 ? "✅ tudo íntegro" : "⚠️ há problemas acima")
+        \(badText) previews vazios · \(badBlob) blobs ilegíveis · \(hidden) linhas que não decifram
+        \(badText == 0 && badBlob == 0 && hidden == 0 ? "✅ tudo íntegro" : "⚠️ há problemas acima")
         """)
     }
 

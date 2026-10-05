@@ -319,6 +319,10 @@ enum Diagnostics {
         guard try store.items(pinboardID: pinboardID).contains(where: { $0.id == filedID }) else {
             throw SelfTestFailure.assertion("recopiar não pode tirar o item da pasta")
         }
+        guard let refiled = try store.items(pinboardID: pinboardID).first(where: { $0.id == filedID }),
+              abs(refiled.createdAt.timeIntervalSince(filed.createdAt)) < 1 else {
+            throw SelfTestFailure.assertion("recopiar não pode mudar a data de um item de pasta")
+        }
 
         try store.touch(id: filedID)
         guard try store.items(pinboardID: nil).first?.id == filedID else {

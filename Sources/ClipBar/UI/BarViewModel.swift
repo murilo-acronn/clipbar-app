@@ -91,8 +91,12 @@ final class BarViewModel: ObservableObject {
     func reload() {
         revision &+= 1
         pinboards = (try? store.pinboards()) ?? []
-        loaded = (try? store.items(pinboardID: activePinboardID)) ?? []
         everything = ((try? store.allItems()) ?? []).map { ($0, Self.haystack(for: $0)) }
+        // The clipboard view is `everything` in the same order; decrypting the
+        // whole store a second time to get it would double the cost of a reload.
+        loaded = activePinboardID == nil
+            ? everything.map(\.item)
+            : (try? store.items(pinboardID: activePinboardID)) ?? []
         refilter()
     }
 

@@ -229,8 +229,16 @@ final class Store {
     @discardableResult
     func upsert(_ item: ClipItem) throws -> UpsertResult {
         if let existing = try id(forFingerprint: item.fingerprint, pinboardID: item.pinboardID) {
+            // A filed row keeps its date: within a pinboard, items that were
+            // never dragged share sort_index 0 and order by created_at, so a
+            // recopy used to yank the item to the top of its folder.
             try exec(
-                "UPDATE items SET created_at = ?, last_used_at = ? WHERE id = ?",
+                """
+                UPDATE items SET
+                    created_at = CASE WHEN pinboard_id IS NULL THEN ? ELSE created_at END,
+                    last_used_at = ?
+                WHERE id = ?
+                """,
                 bind: { stmt in
                     sqlite3_bind_double(stmt, 1, item.createdAt.timeIntervalSinceReferenceDate)
                     sqlite3_bind_double(stmt, 2, Date().timeIntervalSinceReferenceDate)
@@ -289,7 +297,11 @@ final class Store {
     /// anywhere: it already appears in the clipboard view, and touching it just
     /// floats it up. An earlier version created a second row for that, which put
     /// the same content on screen twice.
-    func items(pinboardID: Int64?, limit: Int = 500) throws -> [ClipItem] {
+    ///
+    /// No row limit: a cap here made everything past it look deleted, and once
+    /// the clipboard view started listing filed rows too, the cap ate into both.
+    /// The set is already bounded by `historyLimit` plus what is filed.
+    func items(pinboardID: Int64?) throws -> [ClipItem] {
         let filter = pinboardID == nil ? "1 = 1" : "pinboard_id = ?"
         let order = pinboardID == nil
             ? "MAX(created_at, IFNULL(last_used_at, created_at)) DESC"
@@ -299,14 +311,9 @@ final class Store {
             SELECT id, kind, title, preview, fingerprint, blob_path, byte_size, char_count,
                    source_bundle_id, source_name, created_at, last_used_at, pinboard_id,
                    title_is_custom, link_title, link_image_path, link_domain
-            FROM items WHERE \(filter) ORDER BY \(order) LIMIT ?
+            FROM items WHERE \(filter) ORDER BY \(order)
             """, bind: { stmt in
-                if let pinboardID {
-                    sqlite3_bind_int64(stmt, 1, pinboardID)
-                    sqlite3_bind_int64(stmt, 2, Int64(limit))
-                } else {
-                    sqlite3_bind_int64(stmt, 1, Int64(limit))
-                }
+                if let pinboardID { sqlite3_bind_int64(stmt, 1, pinboardID) }
             })
     }
 
@@ -329,15 +336,14 @@ final class Store {
     /// Same order deliberately: this backs the global search, and ordering it by
     /// `created_at` alone put an old item you used this morning at the top of the
     /// tab and near the bottom of the search for the very same word.
-    func allItems(limit: Int = 5000) throws -> [ClipItem] {
+    func allItems() throws -> [ClipItem] {
         try query("""
             SELECT id, kind, title, preview, fingerprint, blob_path, byte_size, char_count,
                    source_bundle_id, source_name, created_at, last_used_at, pinboard_id,
                    title_is_custom, link_title, link_image_path, link_domain
             FROM items
             ORDER BY MAX(created_at, IFNULL(last_used_at, created_at)) DESC
-            LIMIT ?
-            """, bind: { sqlite3_bind_int64($0, 1, Int64(limit)) })
+            """, bind: { _ in })
     }
 
     /// Marks an item as just used, which is what floats it to the top of the
@@ -646,10 +652,18 @@ final class Store {
 
     private func query(_ sql: String, bind: (OpaquePointer?) -> Void) throws -> [ClipItem] {
         var result: [ClipItem] = []
+        var undecryptable = 0
+        defer {
+            // Skipped, but never silently: hidden rows read exactly like deleted
+            // ones, and `--verify` compares against this to tell them apart.
+            if undecryptable > 0 {
+                Log.store.error("\(undecryptable, privacy: .public) rows did not decrypt and were skipped")
+            }
+        }
         try step(sql, bind: bind) { stmt in
             // A row we cannot decrypt is a row written under a lost key; skip it
             // rather than taking the whole list down.
-            guard let preview = try? Self.sealedString(stmt, 3) else { return }
+            guard let preview = try? Self.sealedString(stmt, 3) else { undecryptable += 1; return }
             result.append(ClipItem(
                 id: sqlite3_column_int64(stmt, 0),
                 kind: ClipKind(rawValue: Self.text(stmt, 1) ?? "") ?? .text,
